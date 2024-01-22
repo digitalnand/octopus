@@ -17,6 +17,23 @@ struct Instruction {
     int16_t parameter_b = 0;
 };
 
+struct Machine {
+    int16_t registers[15];
+    void eval(Instruction);
+};
+
+void Machine::eval(Instruction instruction) {
+    switch(instruction.kind) {
+        case LD_BYTE: {
+            const auto target_register = instruction.parameter_a;
+            const auto value = instruction.parameter_b;
+            this->registers[target_register] = value;
+            break;
+        }
+        default: std::unreachable();
+    }
+}
+
 struct Reader {
     std::ifstream target;
     size_t index = 0;
@@ -88,10 +105,11 @@ Instruction Reader::next_instruction() {
 
 int32_t main() {
     Reader reader("files/test.ch8");
+    Machine machine;
 
     Instruction instruction;
-    while(instruction.kind != END_OF_FILE) {
-        instruction = reader.next_instruction();
+    while((instruction = reader.next_instruction()).kind != END_OF_FILE) {
+        machine.eval(instruction);
     }
 
     return 0;

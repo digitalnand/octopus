@@ -7,13 +7,14 @@
 #include <vector>
 
 enum InstructionKind {
+    END_OF_FILE,
     LD_BYTE
 };
 
 struct Instruction {
     InstructionKind kind;
-    int16_t parameter_a;
-    int16_t parameter_b;
+    int16_t parameter_a = 0;
+    int16_t parameter_b = 0;
 };
 
 struct Reader {
@@ -36,12 +37,18 @@ Reader::Reader(std::string file_path) {
 }
 
 std::bitset<8> Reader::next_byte() {
-    char buffer[8];
+    char buffer;
+    this->target.get(buffer);
+
+    if(this->target.eof())
+        return {};
+    if(this->target.fail())
+        throw std::runtime_error("malformed file\n");
+
+    index++;
     this->target.clear();
     this->target.seekg(index, std::ios::beg);
-    this->target.read(buffer, 8);
-    index++;
-    return std::bitset<8>(*buffer);
+    return std::bitset<8>(buffer);
 }
 
 std::vector<std::bitset<4>> extract_nibbles(std::bitset<8> byte) {
@@ -62,7 +69,11 @@ InstructionKind get_instruction_kind(int16_t value) {
 }
 
 Instruction Reader::next_instruction() {
-    const auto high_half = extract_nibbles(this->next_byte());
+    const auto high_byte = this->next_byte();
+    if(this->target.eof())
+        return Instruction{END_OF_FILE};
+
+    const auto high_half = extract_nibbles(high_byte);
     const auto instruction_kind = get_instruction_kind(high_half.front().to_ulong());
 
     switch(instruction_kind) {
@@ -76,7 +87,12 @@ Instruction Reader::next_instruction() {
 }
 
 int32_t main() {
-    Reader reader("files/test3.ch8");
-    reader.next_instruction();
+    Reader reader("files/test.ch8");
+
+    Instruction instruction;
+    while(instruction.kind != END_OF_FILE) {
+        instruction = reader.next_instruction();
+    }
+
     return 0;
 }

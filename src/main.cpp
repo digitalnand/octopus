@@ -7,6 +7,7 @@
 #include <vector>
 
 #define PROGRAMS_START 0x200
+#define INSTRUCTIONS_SPAN 2
 
 struct Chip {
     std::vector<char> memory;
@@ -20,7 +21,7 @@ struct Chip {
 };
 
 void Chip::dump_into_memory(const std::vector<char> bytes) {
-    if(bytes.size() % 2 != 0 && bytes.size() > 0)
+    if(bytes.size() % INSTRUCTIONS_SPAN != 0 && bytes.size() > 0)
         throw std::runtime_error("malformed byte stream");
 
     for(size_t index = 0; index < bytes.size(); index++)
@@ -33,7 +34,7 @@ uint16_t Chip::next_instruction() {
     if(PC + 1 >= this->memory.size()) return '\0';
     const auto high_byte = this->memory.at(this->PC);
     const auto low_byte = this->memory.at(this->PC + 1);
-    this->PC += 2;
+    this->PC += INSTRUCTIONS_SPAN;
     return (high_byte << 0x8) + low_byte;
 }
 

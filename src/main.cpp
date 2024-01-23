@@ -6,11 +6,15 @@
 #include <utility>
 #include <vector>
 
+#define PROGRAMS_START 0x200
+
 struct Chip {
     std::vector<char> memory;
     int16_t PC;
     int16_t registers[15];
+
     void dump_into_memory(std::vector<char>);
+    uint16_t next_instruction();
     void eval_instruction(uint16_t);
     void execute();
 };
@@ -18,33 +22,51 @@ struct Chip {
 void Chip::dump_into_memory(const std::vector<char> bytes) {
     if(bytes.size() % 2 != 0 && bytes.size() > 0)
         throw std::runtime_error("malformed byte stream");
+
     for(size_t index = 0; index < bytes.size(); index++)
         this->memory.push_back(bytes.at(index));
+
     this->PC = 0;
 }
 
+uint16_t Chip::next_instruction() {
+    if(PC + 1 >= this->memory.size()) return '\0';
+    const auto high_byte = this->memory.at(this->PC);
+    const auto low_byte = this->memory.at(this->PC + 1);
+    this->PC += 2;
+    return (high_byte << 0x8) + low_byte;
+}
+
 void Chip::eval_instruction(const uint16_t instruction) {
-    const auto kind = (instruction & 0xf000) >> 12;
+    const uint16_t kind = (instruction & 0xf000) >> 12;
+    const uint16_t target = (instruction & 0x0f00) >> 8;
+    const uint16_t value = instruction & 0x00ff;
+    const uint16_t next_address = (instruction & 0x0fff) - PROGRAMS_START;
+
     switch(kind) {
+        case 0x1: // JP addr
+            this->PC = next_address;
+            break;
+        case 0x3: // SE Vx, byte
+            if(this->registers[target] == value) this->PC++;
+            break;
         case 0x6: // LD Vx, byte
-        {
-            const auto target = (instruction & 0x0f00) >> 8;
-            const auto value = instruction & 0x00ff;
             this->registers[target] = value;
             break;
-        }
+        case 0x7: // ADD Vx, byte
+            this->registers[target] += value;
+            break;
         default: throw std::runtime_error("not implemented yet\n");
     }
 }
 
 void Chip::execute() {
-    while(this->PC < memory.size()) {
-        const auto high_byte = this->memory.at(this->PC);
-        const auto low_byte = this->memory.at(this->PC + 1);
-        const uint16_t instruction = (high_byte << 0x8) + low_byte;
+    for(size_t index = 0; index < sizeof(registers) / sizeof(int16_t); index++)
+        registers[index] = 0;
+
+    uint16_t instruction;
+    while((instruction = this->next_instruction()) != '\0')
         this->eval_instruction(instruction);
-        this->PC += 2;
-    }
 }
 
 struct Reader {
@@ -71,7 +93,7 @@ char Reader::next_byte() {
     this->target.get(byte);
 
     if(this->target.eof())
-        return '\0';
+        return '\x3';
     if(this->target.fail())
         throw std::runtime_error("could not read next byte of rom\n");
 
@@ -84,7 +106,8 @@ char Reader::next_byte() {
 std::vector<char> Reader::extract_bytes() {
     std::vector<char> bytes;
     char current_byte;
-    while((current_byte = this->next_byte()) != '\0') bytes.push_back(current_byte);
+    while((current_byte = this->next_byte()) != '\x3')
+        bytes.push_back(current_byte);
     return bytes;
 }
 

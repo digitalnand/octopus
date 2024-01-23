@@ -6,31 +6,44 @@
 #include <utility>
 #include <vector>
 
-enum InstructionKind {
-    END_OF_FILE,
-    LD_BYTE
-};
-
-struct Instruction {
-    InstructionKind kind;
-    int16_t parameter_a = 0;
-    int16_t parameter_b = 0;
-};
-
-struct Machine {
+struct Chip {
+    std::vector<char> memory;
+    int16_t PC;
     int16_t registers[15];
-    void eval(Instruction);
+    void dump_into_memory(std::vector<char>);
+    void eval_instruction(uint16_t);
+    void execute();
 };
 
-void Machine::eval(Instruction instruction) {
-    switch(instruction.kind) {
-        case LD_BYTE: {
-            const auto target_register = instruction.parameter_a;
-            const auto value = instruction.parameter_b;
-            this->registers[target_register] = value;
+void Chip::dump_into_memory(const std::vector<char> bytes) {
+    if(bytes.size() % 2 != 0 && bytes.size() > 0)
+        throw std::runtime_error("malformed byte stream");
+    for(size_t index = 0; index < bytes.size(); index++)
+        this->memory.push_back(bytes.at(index));
+    this->PC = 0;
+}
+
+void Chip::eval_instruction(const uint16_t instruction) {
+    const auto kind = (instruction & 0xf000) >> 12;
+    switch(kind) {
+        case 0x6: // LD Vx, byte
+        {
+            const auto target = (instruction & 0x0f00) >> 8;
+            const auto value = instruction & 0x00ff;
+            this->registers[target] = value;
             break;
         }
-        default: std::unreachable();
+        default: throw std::runtime_error("not implemented yet\n");
+    }
+}
+
+void Chip::execute() {
+    while(this->PC < memory.size()) {
+        const auto high_byte = this->memory.at(this->PC);
+        const auto low_byte = this->memory.at(this->PC + 1);
+        const uint16_t instruction = (high_byte << 0x8) + low_byte;
+        this->eval_instruction(instruction);
+        this->PC += 2;
     }
 }
 
@@ -39,78 +52,49 @@ struct Reader {
     size_t index = 0;
 
     Reader(std::string);
-    std::bitset<8> next_byte();
-    Instruction next_instruction();
+    char next_byte();
+    std::vector<char> extract_bytes();
 };
 
-Reader::Reader(std::string file_path) {
+Reader::Reader(const std::string file_path) {
     const auto extension = file_path.substr(file_path.find_last_of('.'));
     if(extension != ".ch8")
         throw std::runtime_error(std::format("file extension not supported: {}\n", extension));
 
     this->target.open(file_path, std::ios::binary);
     if(!this->target.is_open())
-        throw std::runtime_error(std::format("file could not be opened: {}\n", file_path));
+        throw std::runtime_error(std::format("could not open rom: {}\n", file_path));
 }
 
-std::bitset<8> Reader::next_byte() {
-    char buffer;
-    this->target.get(buffer);
+char Reader::next_byte() {
+    char byte;
+    this->target.get(byte);
 
     if(this->target.eof())
-        return {};
+        return '\0';
     if(this->target.fail())
-        throw std::runtime_error("malformed file\n");
+        throw std::runtime_error("could not read next byte of rom\n");
 
     index++;
     this->target.clear();
     this->target.seekg(index, std::ios::beg);
-    return std::bitset<8>(buffer);
+    return byte;
 }
 
-std::vector<std::bitset<4>> extract_nibbles(std::bitset<8> byte) {
-    std::vector<std::bitset<4>> output;
-    const auto first_nibble = byte.to_string().substr(0, 4);
-    output.push_back(std::bitset<4>(first_nibble));
-
-    const auto second_nibble = byte.to_string().substr(4);
-    output.push_back(std::bitset<4>(second_nibble));
-    return output;
-}
-
-InstructionKind get_instruction_kind(int16_t value) {
-    switch(value) {
-        case 6: return LD_BYTE;
-        default: throw std::runtime_error("not implemented yet");
-    }
-}
-
-Instruction Reader::next_instruction() {
-    const auto high_byte = this->next_byte();
-    if(this->target.eof())
-        return Instruction{END_OF_FILE};
-
-    const auto high_half = extract_nibbles(high_byte);
-    const auto instruction_kind = get_instruction_kind(high_half.front().to_ulong());
-
-    switch(instruction_kind) {
-        case LD_BYTE: {
-            const int16_t target_register = high_half.back().to_ulong();
-            const int16_t value = this->next_byte().to_ulong();
-            return Instruction{instruction_kind, target_register, value};
-        }
-        default: std::unreachable();
-    }
+std::vector<char> Reader::extract_bytes() {
+    std::vector<char> bytes;
+    char current_byte;
+    while((current_byte = this->next_byte()) != '\0') bytes.push_back(current_byte);
+    return bytes;
 }
 
 int32_t main() {
     Reader reader("files/test.ch8");
-    Machine machine;
+    Chip machine;
 
-    Instruction instruction;
-    while((instruction = reader.next_instruction()).kind != END_OF_FILE) {
-        machine.eval(instruction);
-    }
+    const auto bytes = reader.extract_bytes();
+    machine.dump_into_memory(bytes);
+    machine.execute();
 
     return 0;
 }

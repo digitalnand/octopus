@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <format>
 #include <fstream>
+#include <stack>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -10,18 +11,19 @@
 #define INSTRUCTIONS_SPAN 2
 
 struct Chip {
-    std::vector<char> memory;
-    int16_t PC;
-    int16_t registers[15];
+    std::vector<uint8_t> memory;
+    std::stack<uint16_t> stack;
+    uint16_t registers[15];
+    uint16_t PC;
 
-    void dump_into_memory(std::vector<char>);
+    void dump_into_memory(std::vector<uint8_t>);
     uint16_t next_instruction();
     void eval_instruction(uint16_t);
     void execute();
 };
 
-void Chip::dump_into_memory(const std::vector<char> bytes) {
-    if(bytes.size() % INSTRUCTIONS_SPAN != 0 && bytes.size() > 0)
+void Chip::dump_into_memory(const std::vector<uint8_t> bytes) {
+    if(bytes.size() % INSTRUCTIONS_SPAN != 0 || bytes.size() == 0)
         throw std::runtime_error("malformed byte stream");
 
     for(size_t index = 0; index < bytes.size(); index++)
@@ -31,9 +33,12 @@ void Chip::dump_into_memory(const std::vector<char> bytes) {
 }
 
 uint16_t Chip::next_instruction() {
-    if(PC + 1 >= this->memory.size()) return '\0';
+    if(PC + 1 >= static_cast<uint16_t>(this->memory.size()))
+        return '\0';
+
     const auto high_byte = this->memory.at(this->PC);
     const auto low_byte = this->memory.at(this->PC + 1);
+
     this->PC += INSTRUCTIONS_SPAN;
     return (high_byte << 0x8) + low_byte;
 }
@@ -45,7 +50,22 @@ void Chip::eval_instruction(const uint16_t instruction) {
     const uint16_t next_address = (instruction & 0x0fff) - PROGRAMS_START;
 
     switch(kind) {
+        case 0x0: {
+            switch(instruction) {
+                case 0x00EE: // RET
+                    if(stack.empty()) return;
+                    this->PC = stack.top();
+                    stack.pop();
+                    break;
+                default: break; // SYS addr
+            }
+            break;
+        }
         case 0x1: // JP addr
+            this->PC = next_address;
+            break;
+        case 0x2: // CALL addr
+            this->stack.push(this->PC);
             this->PC = next_address;
             break;
         case 0x3: // SE Vx, byte
@@ -75,8 +95,7 @@ struct Reader {
     size_t index = 0;
 
     Reader(std::string);
-    char next_byte();
-    std::vector<char> extract_bytes();
+    std::vector<uint8_t> extract_bytes();
 };
 
 Reader::Reader(const std::string file_path) {
@@ -89,31 +108,15 @@ Reader::Reader(const std::string file_path) {
         throw std::runtime_error(std::format("could not open rom: {}\n", file_path));
 }
 
-char Reader::next_byte() {
+std::vector<uint8_t> Reader::extract_bytes() {
+    std::vector<uint8_t> bytes;
     char byte;
-    this->target.get(byte);
-
-    if(this->target.eof())
-        return '\x3';
-    if(this->target.fail())
-        throw std::runtime_error("could not read next byte of rom\n");
-
-    index++;
-    this->target.clear();
-    this->target.seekg(index, std::ios::beg);
-    return byte;
-}
-
-std::vector<char> Reader::extract_bytes() {
-    std::vector<char> bytes;
-    char current_byte;
-    while((current_byte = this->next_byte()) != '\x3')
-        bytes.push_back(current_byte);
+    while(this->target.get(byte)) bytes.push_back(static_cast<uint8_t>(byte));
     return bytes;
 }
 
 int32_t main() {
-    Reader reader("files/test.ch8");
+    Reader reader("files/stack.ch8");
     Chip machine;
 
     const auto bytes = reader.extract_bytes();

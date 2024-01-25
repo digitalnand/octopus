@@ -1,2 +1,4 @@
 bin
+subprojects/packagecache
+subprojects/SFML-*
 files

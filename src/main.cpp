@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <format>
 #include <fstream>
+#include <iostream>
 #include <stack>
 #include <stdexcept>
 #include <utility>
@@ -115,11 +116,17 @@ std::vector<uint8_t> Reader::extract_bytes() {
     return bytes;
 }
 
-int32_t main() {
-    Reader reader("files/stack.ch8");
-    Chip machine;
+int32_t main(int32_t argc, char* argv[]) {
+    if(argc < 2) {
+        std::cout << std::format("Usage: {} [ROM]\n", argv[0]);
+        exit(1);
+    }
 
+    const auto file_path = std::string(argv[1]);
+    Reader reader(file_path);
     const auto bytes = reader.extract_bytes();
+
+    Chip machine;
     machine.dump_into_memory(bytes);
     machine.execute();
 

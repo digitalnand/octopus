@@ -57,6 +57,11 @@ void CPU::execute(const uint16_t instruction) {
     switch(kind) {
         case 0x0: {
             switch(instruction) {
+                case 0x00E0: // CLS
+                    for(size_t y = 0; y < 32; y++)
+                        for(size_t x = 0; x < 64; x++)
+                            framebuffer[y][x] = 0;
+                    break;
                 case 0x00EE: // RET
                     if(this->stack.empty()) return;
                     this->PC = this->stack.top();
@@ -74,13 +79,28 @@ void CPU::execute(const uint16_t instruction) {
             this->PC = next_address;
             break;
         case 0x3: // SE Vx, byte
-            if(this->registers[target] == value) this->PC++;
+            if(this->registers[target] == value) this->PC += INSTRUCTIONS_SPAN;
+            break;
+        case 0x4: // SNE Vx, byte
+            if(this->registers[target] != value) this->PC += INSTRUCTIONS_SPAN;
             break;
         case 0x6: // LD Vx, byte
             this->registers[target] = value;
             break;
         case 0x7: // ADD Vx, byte
             this->registers[target] += value;
+            break;
+        case 0x8:
+            switch(nibble) {
+                case 0x0: // LD Vx, Vy
+                    this->registers[target] = this->registers[source];
+                    break;
+                case 0x5: // SUB Vx, Vy
+                    this->registers[0xf] = (this->registers[target] > this->registers[source]) ? 1 : 0;
+                    this->registers[target] -= this->registers[source];
+                    break;
+                default: throw std::runtime_error("not implemented yet\n");
+            }
             break;
         case 0xA: // LD I, addr
             this->I = next_address;
@@ -91,7 +111,6 @@ void CPU::execute(const uint16_t instruction) {
 
             for(size_t row = 0; row < nibble; row++) {
                 const auto sprite = memory[this->I + row];
-                this->PC++;
 
                 for(size_t bit = 8; bit > 0; bit--) {
                     const size_t column = bit % 8;

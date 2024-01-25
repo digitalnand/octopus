@@ -14,8 +14,10 @@
 struct CPU {
     std::vector<uint8_t> memory;
     std::stack<uint16_t> stack;
-    uint16_t registers[15];
+    std::bitset<1> framebuffer[32][64];
+    uint16_t registers[16];
     uint16_t PC;
+    uint16_t I;
 
     void dump_into_memory(std::vector<uint8_t>);
     uint16_t fetch_instruction();
@@ -47,6 +49,8 @@ uint16_t CPU::fetch_instruction() {
 void CPU::execute(const uint16_t instruction) {
     const uint16_t kind = (instruction & 0xf000) >> 12;
     const uint16_t target = (instruction & 0x0f00) >> 8;
+    const uint16_t source = (instruction & 0x00f0) >> 4;
+    const uint16_t nibble = instruction & 0x000f;
     const uint16_t value = instruction & 0x00ff;
     const uint16_t next_address = (instruction & 0x0fff) - PROGRAMS_START;
 
@@ -78,6 +82,35 @@ void CPU::execute(const uint16_t instruction) {
         case 0x7: // ADD Vx, byte
             this->registers[target] += value;
             break;
+        case 0xA: // LD I, addr
+            this->I = next_address;
+            break;
+        case 0xD: // DRW Vx, Vy, nibble
+        {
+            this->registers[0xf] = 0;
+
+            for(size_t row = 0; row < nibble; row++) {
+                const auto sprite = memory[this->I + row];
+                this->PC++;
+
+                for(size_t bit = 8; bit > 0; bit--) {
+                    const size_t column = bit % 8;
+                    const uint8_t pixel = (sprite >> column) & 0x1;
+
+                    if(pixel == 0)
+                        continue;
+
+                    const auto x = (this->registers[target] + column) % 64;
+                    const auto y = (this->registers[source] + row) % 32;
+
+                    this->framebuffer[y][x] ^= pixel;
+                    if(this->framebuffer[y][x] == 0)
+                        this->registers[0xf] = 1;
+                }
+            }
+
+            break;
+        }
         default: throw std::runtime_error("not implemented yet\n");
     }
 }

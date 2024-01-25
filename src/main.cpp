@@ -11,19 +11,19 @@
 #define PROGRAMS_START 0x200
 #define INSTRUCTIONS_SPAN 2
 
-struct Chip {
+struct CPU {
     std::vector<uint8_t> memory;
     std::stack<uint16_t> stack;
     uint16_t registers[15];
     uint16_t PC;
 
     void dump_into_memory(std::vector<uint8_t>);
-    uint16_t next_instruction();
-    void eval_instruction(uint16_t);
-    void execute();
+    uint16_t fetch_instruction();
+    void execute(uint16_t);
+    void cycle();
 };
 
-void Chip::dump_into_memory(const std::vector<uint8_t> bytes) {
+void CPU::dump_into_memory(const std::vector<uint8_t> bytes) {
     if(bytes.size() % INSTRUCTIONS_SPAN != 0 || bytes.size() == 0)
         throw std::runtime_error("malformed byte stream");
 
@@ -33,7 +33,7 @@ void Chip::dump_into_memory(const std::vector<uint8_t> bytes) {
     this->PC = 0;
 }
 
-uint16_t Chip::next_instruction() {
+uint16_t CPU::fetch_instruction() {
     if(PC + 1 >= static_cast<uint16_t>(this->memory.size()))
         return '\0';
 
@@ -44,7 +44,7 @@ uint16_t Chip::next_instruction() {
     return (high_byte << 0x8) + low_byte;
 }
 
-void Chip::eval_instruction(const uint16_t instruction) {
+void CPU::execute(const uint16_t instruction) {
     const uint16_t kind = (instruction & 0xf000) >> 12;
     const uint16_t target = (instruction & 0x0f00) >> 8;
     const uint16_t value = instruction & 0x00ff;
@@ -54,9 +54,9 @@ void Chip::eval_instruction(const uint16_t instruction) {
         case 0x0: {
             switch(instruction) {
                 case 0x00EE: // RET
-                    if(stack.empty()) return;
-                    this->PC = stack.top();
-                    stack.pop();
+                    if(this->stack.empty()) return;
+                    this->PC = this->stack.top();
+                    this->stack.pop();
                     break;
                 default: break; // SYS addr
             }
@@ -82,13 +82,13 @@ void Chip::eval_instruction(const uint16_t instruction) {
     }
 }
 
-void Chip::execute() {
+void CPU::cycle() {
     for(size_t index = 0; index < sizeof(registers) / sizeof(int16_t); index++)
-        registers[index] = 0;
+        this->registers[index] = 0;
 
     uint16_t instruction;
-    while((instruction = this->next_instruction()) != '\0')
-        this->eval_instruction(instruction);
+    while((instruction = this->fetch_instruction()) != '\0')
+        this->execute(instruction);
 }
 
 struct Reader {
@@ -126,9 +126,9 @@ int32_t main(int32_t argc, char* argv[]) {
     Reader reader(file_path);
     const auto bytes = reader.extract_bytes();
 
-    Chip machine;
-    machine.dump_into_memory(bytes);
-    machine.execute();
+    CPU emulator;
+    emulator.dump_into_memory(bytes);
+    emulator.cycle();
 
     return 0;
 }

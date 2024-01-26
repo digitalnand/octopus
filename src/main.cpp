@@ -19,6 +19,13 @@
 #define DEFAULT_COLOR sf::Color(30, 144, 255)
 #define EMPTY_COLOR sf::Color::Black
 
+std::map<uint16_t, sf::Keyboard::Key> KEYMAP = {
+    {5, sf::Keyboard::W},
+    {7, sf::Keyboard::A},
+    {8, sf::Keyboard::S},
+    {9, sf::Keyboard::D},
+};
+
 struct GPU {
     sf::RenderWindow& active_screen;
     sf::Image framebuffer;
@@ -79,34 +86,63 @@ void GPU::draw() {
     this->active_screen.display();
 }
 
+struct InputHandler {
+    sf::RenderWindow& active_window;
+    InputHandler(sf::RenderWindow& window) : active_window(window) {};
+    uint16_t wait_for_keypress();
+    bool check_for_keypress(uint16_t);
+};
+
+uint16_t InputHandler::wait_for_keypress() {
+    sf::Keyboard::Key pressed_key = sf::Keyboard::Unknown;
+
+    while(true) {
+        sf::Event event;
+        this->active_window.pollEvent(event);
+        if(event.type == sf::Event::KeyPressed) {
+            pressed_key = event.key.code;
+            break;
+        }
+    }
+
+    for(const auto& [key_code, key] : KEYMAP) {
+        if(pressed_key == key)
+            return key_code;
+    }
+
+    return 0;
+}
+
+bool InputHandler::check_for_keypress(const uint16_t key_code) {
+    return sf::Keyboard::isKeyPressed(KEYMAP[key_code]);
+}
+
 struct CPU {
     GPU& gpu;
+    InputHandler input;
 
     std::vector<uint8_t> memory;
     std::stack<uint16_t> stack;
     uint16_t registers[16];
     uint16_t PC;
     uint16_t I;
+    bool DT = 0;
 
-    CPU(GPU&);
+    CPU(GPU&, InputHandler&);
     void dump_into_memory(std::vector<uint8_t>);
     uint16_t fetch_instruction();
     void execute(uint16_t);
     void cycle();
 };
 
-CPU::CPU(GPU& graphics_handler) : gpu(graphics_handler) {
+CPU::CPU(GPU& graphics_handler, InputHandler& input_handler) : gpu(graphics_handler), input(input_handler) {
     for(size_t index = 0; index < sizeof(this->registers) / sizeof(int16_t); index++)
         this->registers[index] = 0;
 }
 
 void CPU::dump_into_memory(const std::vector<uint8_t> bytes) {
-    if(bytes.size() % INSTRUCTIONS_SPAN != 0 || bytes.size() == 0)
-        throw std::runtime_error("malformed byte stream");
-
     for(size_t index = 0; index < bytes.size(); index++)
         this->memory.push_back(bytes.at(index));
-
     this->PC = 0;
 }
 
@@ -130,7 +166,8 @@ void CPU::execute(const uint16_t instruction) {
     const uint16_t next_address = (instruction & 0x0fff) - PROGRAMS_START;
 
     switch(kind) {
-        case 0x0: {
+        case 0x0:
+        {
             switch(instruction) {
                 case 0x00E0: // CLS
                     this->gpu.clear_framebuffer();
@@ -164,6 +201,7 @@ void CPU::execute(const uint16_t instruction) {
             this->registers[target] += value;
             break;
         case 0x8:
+        {
             switch(nibble) {
                 case 0x0: // LD Vx, Vy
                     this->registers[target] = this->registers[source];
@@ -175,6 +213,7 @@ void CPU::execute(const uint16_t instruction) {
                 default: throw std::runtime_error("not implemented yet\n");
             }
             break;
+        }
         case 0xA: // LD I, addr
             this->I = next_address;
             break;
@@ -188,6 +227,37 @@ void CPU::execute(const uint16_t instruction) {
             this->registers[0xf] = (overlapping) ? 1 : 0;
             break;
         }
+        case 0xE:
+        {
+            switch(value) {
+                case 0xA1: // SKNP Vx
+                    if(!this->input.check_for_keypress(this->registers[target]))
+                        this->PC += INSTRUCTIONS_SPAN;
+                    break;
+                default: throw std::runtime_error("not implemented yet\n");
+            }
+            break;
+        }
+        case 0xF:
+        {
+            switch(value) {
+                case 0x07: // LD Vx, DT
+                    this->registers[target] = this->DT;
+                    break;
+                case 0x0A: // LD Vx, K
+                    this->registers[target] = this->input.wait_for_keypress();
+                    break;
+                case 0x15: // LD DT, Vx
+                    this->DT = this->registers[target];
+                    break;
+                case 0x65: // LD Vx, [I]
+                    for(size_t index = 0; index <= target; index++)
+                        this->registers[index] = this->memory[this->I + index];
+                    break;
+                default: throw std::runtime_error("not implemented yet\n");
+            }
+            break;
+        }
         default: throw std::runtime_error("not implemented yet\n");
     }
 }
@@ -196,6 +266,7 @@ void CPU::cycle() {
     const uint16_t instruction = this->fetch_instruction();
     if(instruction == '\0') return;
     this->execute(instruction);
+    this->DT = 0;
 }
 
 struct Reader {
@@ -236,7 +307,9 @@ int32_t main(int32_t argc, char* argv[]) {
     sf::RenderWindow screen(sf::VideoMode(64 * SCALE_FACTOR, 32 * SCALE_FACTOR), "octopus");
 
     GPU graphics_handler(screen);
-    CPU processor(graphics_handler);
+    InputHandler input_handler(screen);
+
+    CPU processor(graphics_handler, input_handler);
     processor.dump_into_memory(reader.extract_bytes());
 
     while(screen.isOpen()) {

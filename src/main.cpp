@@ -1,29 +1,104 @@
 #include <bitset>
+#include <chrono>
 #include <cstdint>
 #include <format>
 #include <fstream>
 #include <iostream>
 #include <stack>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 #include <vector>
 
+#include <SFML/Graphics.hpp>
+
 #define PROGRAMS_START 0x200
 #define INSTRUCTIONS_SPAN 2
+#define SCALE_FACTOR 10
+
+#define DEFAULT_COLOR sf::Color(30, 144, 255)
+#define EMPTY_COLOR sf::Color::Black
+
+struct GPU {
+    sf::RenderWindow& active_screen;
+    sf::Image framebuffer;
+    sf::Texture graphics;
+    sf::Sprite drawable_graphics;
+
+    GPU(sf::RenderWindow&);
+    bool copy_to_framebuffer(const uint16_t, const uint16_t, const std::vector<uint8_t>);
+    void clear_framebuffer();
+    void draw();
+};
+
+GPU::GPU(sf::RenderWindow& screen) : active_screen(screen) {
+    this->framebuffer.create(64, 32);
+    this->graphics.create(64, 32);
+
+    this->drawable_graphics.setScale(SCALE_FACTOR, SCALE_FACTOR);
+    this->drawable_graphics.setTexture(this->graphics);
+}
+
+bool GPU::copy_to_framebuffer(const uint16_t default_x, const uint16_t default_y, const std::vector<uint8_t> sprite) {
+    bool overlapping = false;
+
+    for(size_t pixel_y = 0; pixel_y < sprite.size(); pixel_y++) {
+        const auto row = sprite[pixel_y];
+
+        for(size_t bit_index = 8; bit_index > 0; bit_index--) {
+            const size_t pixel_x = (bit_index % 8);
+            const uint8_t current_pixel = (row >> pixel_x) & 0x1;
+
+            if(current_pixel == 0)
+                continue;
+
+            const auto x = (default_x + pixel_x) % 64;
+            const auto y = (default_y + pixel_y) % 32;
+
+            if(this->framebuffer.getPixel(x, y) == EMPTY_COLOR) {
+                this->framebuffer.setPixel(x, y, DEFAULT_COLOR);
+            } else {
+                this->framebuffer.setPixel(x, y, EMPTY_COLOR);
+                overlapping = true;
+            }
+        }
+    }
+
+    return overlapping;
+}
+
+void GPU::clear_framebuffer() {
+    for(size_t y = 0; y < 32; y++)
+        for(size_t x = 0; x < 64; x++)
+            this->framebuffer.setPixel(x, y, EMPTY_COLOR);
+}
+
+void GPU::draw() {
+    this->graphics.update(this->framebuffer);
+    this->active_screen.draw(this->drawable_graphics);
+    this->active_screen.display();
+}
 
 struct CPU {
+    GPU& gpu;
+
     std::vector<uint8_t> memory;
     std::stack<uint16_t> stack;
-    std::bitset<1> framebuffer[32][64];
     uint16_t registers[16];
     uint16_t PC;
     uint16_t I;
 
+    CPU(GPU&);
     void dump_into_memory(std::vector<uint8_t>);
     uint16_t fetch_instruction();
     void execute(uint16_t);
     void cycle();
 };
+
+CPU::CPU(GPU& graphics_handler) : gpu(graphics_handler) {
+    for(size_t index = 0; index < sizeof(this->registers) / sizeof(int16_t); index++)
+        this->registers[index] = 0;
+}
 
 void CPU::dump_into_memory(const std::vector<uint8_t> bytes) {
     if(bytes.size() % INSTRUCTIONS_SPAN != 0 || bytes.size() == 0)
@@ -36,7 +111,7 @@ void CPU::dump_into_memory(const std::vector<uint8_t> bytes) {
 }
 
 uint16_t CPU::fetch_instruction() {
-    if(PC + 1 >= static_cast<uint16_t>(this->memory.size()))
+    if(this->PC + 1 >= static_cast<uint16_t>(this->memory.size()))
         return '\0';
 
     const auto high_byte = this->memory.at(this->PC);
@@ -58,9 +133,7 @@ void CPU::execute(const uint16_t instruction) {
         case 0x0: {
             switch(instruction) {
                 case 0x00E0: // CLS
-                    for(size_t y = 0; y < 32; y++)
-                        for(size_t x = 0; x < 64; x++)
-                            framebuffer[y][x] = 0;
+                    this->gpu.clear_framebuffer();
                     break;
                 case 0x00EE: // RET
                     if(this->stack.empty()) return;
@@ -107,27 +180,12 @@ void CPU::execute(const uint16_t instruction) {
             break;
         case 0xD: // DRW Vx, Vy, nibble
         {
-            this->registers[0xf] = 0;
+            std::vector<uint8_t> sprite;
+            for(size_t byte = 0; byte < nibble; byte++)
+                sprite.push_back(this->memory[this->I + byte]);
 
-            for(size_t row = 0; row < nibble; row++) {
-                const auto sprite = memory[this->I + row];
-
-                for(size_t bit = 8; bit > 0; bit--) {
-                    const size_t column = bit % 8;
-                    const uint8_t pixel = (sprite >> column) & 0x1;
-
-                    if(pixel == 0)
-                        continue;
-
-                    const auto x = (this->registers[target] + column) % 64;
-                    const auto y = (this->registers[source] + row) % 32;
-
-                    this->framebuffer[y][x] ^= pixel;
-                    if(this->framebuffer[y][x] == 0)
-                        this->registers[0xf] = 1;
-                }
-            }
-
+            const auto overlapping = this->gpu.copy_to_framebuffer(this->registers[target], this->registers[source], sprite);
+            this->registers[0xf] = (overlapping) ? 1 : 0;
             break;
         }
         default: throw std::runtime_error("not implemented yet\n");
@@ -135,12 +193,9 @@ void CPU::execute(const uint16_t instruction) {
 }
 
 void CPU::cycle() {
-    for(size_t index = 0; index < sizeof(registers) / sizeof(int16_t); index++)
-        this->registers[index] = 0;
-
-    uint16_t instruction;
-    while((instruction = this->fetch_instruction()) != '\0')
-        this->execute(instruction);
+    const uint16_t instruction = this->fetch_instruction();
+    if(instruction == '\0') return;
+    this->execute(instruction);
 }
 
 struct Reader {
@@ -164,7 +219,8 @@ Reader::Reader(const std::string file_path) {
 std::vector<uint8_t> Reader::extract_bytes() {
     std::vector<uint8_t> bytes;
     char byte;
-    while(this->target.get(byte)) bytes.push_back(static_cast<uint8_t>(byte));
+    while(this->target.get(byte))
+        bytes.push_back(static_cast<uint8_t>(byte));
     return bytes;
 }
 
@@ -176,11 +232,23 @@ int32_t main(int32_t argc, char* argv[]) {
 
     const auto file_path = std::string(argv[1]);
     Reader reader(file_path);
-    const auto bytes = reader.extract_bytes();
 
-    CPU emulator;
-    emulator.dump_into_memory(bytes);
-    emulator.cycle();
+    sf::RenderWindow screen(sf::VideoMode(64 * SCALE_FACTOR, 32 * SCALE_FACTOR), "octopus");
+
+    GPU graphics_handler(screen);
+    CPU processor(graphics_handler);
+    processor.dump_into_memory(reader.extract_bytes());
+
+    while(screen.isOpen()) {
+        sf::Event event;
+        while(screen.pollEvent(event))
+            if(event.type == sf::Event::Closed) screen.close();
+
+        processor.cycle();
+        graphics_handler.draw();
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
 
     return 0;
 }

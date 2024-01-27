@@ -162,8 +162,9 @@ void CPU::dump_into_memory(const std::string file_path) {
 }
 
 uint16_t CPU::fetch_instruction() {
-    if(this->PC + 1 >= static_cast<uint16_t>(this->memory.size()))
+    if(this->PC + 1 >= static_cast<uint16_t>(this->memory.size())) {
         return '\0';
+    }
 
     const auto high_byte = this->memory.at(this->PC);
     const auto low_byte = this->memory.at(this->PC + 1);
@@ -174,112 +175,162 @@ uint16_t CPU::fetch_instruction() {
 
 void CPU::execute(const uint16_t instruction) {
     const uint16_t kind = (instruction & 0xf000) >> 12;
-    const uint16_t target = (instruction & 0x0f00) >> 8;
-    const uint16_t source = (instruction & 0x00f0) >> 4;
-    const uint16_t nibble = instruction & 0x000f;
-    const uint16_t value = instruction & 0x00ff;
-    const uint16_t next_address = (instruction & 0x0fff) - PROGRAMS_START;
-
     switch(kind) {
         case 0x0:
         {
             switch(instruction) {
                 case 0x00E0: // CLS
                     this->gpu.clear_framebuffer();
-                    break;
+                break;
+
                 case 0x00EE: // RET
-                    if(this->stack.empty()) return;
+                    if(this->stack.empty()) {
+                        throw std::runtime_error("could not return from subroutine, stack was empty\n");
+                    }
                     this->PC = this->stack.top();
                     this->stack.pop();
-                    break;
-                default: break; // SYS addr
+                break;
+
+                default: break; // SYS address
             }
-            break;
-        }
-        case 0x1: // JP addr
-            this->PC = next_address;
-            break;
-        case 0x2: // CALL addr
+        } break;
+
+        case 0x1: { // JP address
+            const uint16_t address = (instruction & 0x0fff) - PROGRAMS_START;
+            this->PC = address;
+        } break;
+
+        case 0x2: { // CALL address
+            if(this->stack.size() > 0xf) {
+                throw std::runtime_error("stack overflow\n");
+            }
+            const uint16_t address = (instruction & 0x0fff) - PROGRAMS_START;
             this->stack.push(this->PC);
-            this->PC = next_address;
-            break;
-        case 0x3: // SE Vx, byte
-            if(this->registers[target] == value) this->PC += INSTRUCTIONS_SPAN;
-            break;
-        case 0x4: // SNE Vx, byte
-            if(this->registers[target] != value) this->PC += INSTRUCTIONS_SPAN;
-            break;
-        case 0x6: // LD Vx, byte
+            this->PC = address;
+        } break;
+
+        case 0x3: { // SE Vx, value
+            const uint16_t target = (instruction & 0x0f00) >> 8;
+            const uint16_t value = instruction & 0x00ff;
+            if(this->registers[target] == value) {
+                this->PC += INSTRUCTIONS_SPAN;
+            }
+        } break;
+
+        case 0x4: { // SNE Vx, value
+            const uint16_t target = (instruction & 0x0f00) >> 8;
+            const uint16_t value = instruction & 0x00ff;
+            if(this->registers[target] != value) {
+                this->PC += INSTRUCTIONS_SPAN;
+            }
+        } break;
+
+        case 0x6: { // LD Vx, value
+            const uint16_t target = (instruction & 0x0f00) >> 8;
+            const uint16_t value = instruction & 0x00ff;
             this->registers[target] = value;
-            break;
-        case 0x7: // ADD Vx, byte
+        } break;
+
+        case 0x7: { // ADD Vx, value
+            const uint16_t target = (instruction & 0x0f00) >> 8;
+            const uint16_t value = instruction & 0x00ff;
             this->registers[target] += value;
-            break;
+        } break;
+
         case 0x8:
         {
+            const uint16_t nibble = instruction & 0x000f;
             switch(nibble) {
-                case 0x0: // LD Vx, Vy
+                case 0x0: { // LD Vx, Vy
+                    const uint16_t target = (instruction & 0x0f00) >> 8;
+                    const uint16_t source = (instruction & 0x00f0) >> 4;
                     this->registers[target] = this->registers[source];
-                    break;
-                case 0x5: // SUB Vx, Vy
+                } break;
+
+                case 0x5: { // SUB Vx, Vy
+                    const uint16_t target = (instruction & 0x0f00) >> 8;
+                    const uint16_t source = (instruction & 0x00f0) >> 4;
                     this->registers[0xf] = (this->registers[target] > this->registers[source]) ? 1 : 0;
                     this->registers[target] -= this->registers[source];
-                    break;
+                } break;
+
                 default: throw std::runtime_error("not implemented yet\n");
             }
-            break;
-        }
-        case 0xA: // LD I, addr
-            this->I = next_address;
-            break;
-        case 0xD: // DRW Vx, Vy, nibble
-        {
-            std::vector<uint8_t> sprite;
-            for(size_t byte = 0; byte < nibble; byte++)
-                sprite.push_back(this->memory[this->I + byte]);
+        } break;
 
-            const auto overlapping = this->gpu.copy_to_framebuffer(this->registers[target], this->registers[source], sprite);
+        case 0xA: { // LD I, address
+            const uint16_t address = (instruction & 0x0fff) - PROGRAMS_START;
+            this->I = address;
+        } break;
+
+        case 0xD: { // DRW Vx, Vy, length
+            const auto x = this->registers[(instruction & 0x0f00) >> 8];
+            const auto y = this->registers[(instruction & 0x00f0) >> 4];
+            const uint16_t length = instruction & 0x000f;
+
+            std::vector<uint8_t> sprite;
+            for(size_t byte = 0; byte < length; byte++) {
+                sprite.push_back(this->memory[this->I + byte]);
+            }
+
+            const auto overlapping = this->gpu.copy_to_framebuffer(x, y, sprite);
             this->registers[0xf] = (overlapping) ? 1 : 0;
-            break;
-        }
+        } break;
+
         case 0xE:
         {
-            switch(value) {
-                case 0xA1: // SKNP Vx
-                    if(!this->input.check_for_keypress(this->registers[target]))
+            const uint16_t low_byte = instruction & 0x00ff;
+            switch(low_byte) {
+                case 0xA1: { // SKNP Vx
+                    const auto key_code = this->registers[(instruction & 0x0f00) >> 8];
+                    if(!this->input.check_for_keypress(key_code)) {
                         this->PC += INSTRUCTIONS_SPAN;
-                    break;
+                    }
+                } break;
+
                 default: throw std::runtime_error("not implemented yet\n");
             }
-            break;
-        }
+        } break;
+
         case 0xF:
         {
-            switch(value) {
-                case 0x07: // LD Vx, DT
+            const uint16_t low_byte = instruction & 0x00ff;
+            switch(low_byte) {
+                case 0x07: { // LD Vx, DT
+                    const uint16_t target = (instruction & 0x0f00) >> 8;
                     this->registers[target] = this->DT;
-                    break;
-                case 0x0A: // LD Vx, K
+                } break;
+
+                case 0x0A: { // LD Vx, K
+                    const uint16_t target = (instruction & 0x0f00) >> 8;
                     this->registers[target] = this->input.wait_for_keypress();
-                    break;
-                case 0x15: // LD DT, Vx
-                    this->DT = this->registers[target];
-                    break;
-                case 0x65: // LD Vx, [I]
-                    for(size_t index = 0; index <= target; index++)
+                } break;
+
+                case 0x15: { // LD DT, Vx
+                    const uint16_t source = (instruction & 0x0f00) >> 8;
+                    this->DT = this->registers[source];
+                } break;
+
+                case 0x65: { // LD Vx, [I]
+                    const uint16_t end = (instruction & 0x0f00) >> 8;
+                    for(size_t index = 0; index <= end; index++) {
                         this->registers[index] = this->memory[this->I + index];
-                    break;
+                    }
+                } break;
+
                 default: throw std::runtime_error("not implemented yet\n");
             }
-            break;
-        }
+        } break;
+
         default: throw std::runtime_error("not implemented yet\n");
     }
 }
 
 void CPU::cycle() {
     const uint16_t instruction = this->fetch_instruction();
-    if(instruction == '\0') return;
+    if(instruction == '\0') {
+        return;
+    }
     this->execute(instruction);
     this->DT = 0;
 }
@@ -298,6 +349,7 @@ int32_t main(int32_t argc, char* argv[]) {
     InputHandler input_handler(screen);
 
     CPU processor(graphics_handler, input_handler);
+    processor.init();
     processor.dump_into_memory(file_path);
 
     while(screen.isOpen()) {

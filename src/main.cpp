@@ -1,6 +1,7 @@
 #include <bitset>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <format>
 #include <fstream>
 #include <iostream>
@@ -124,26 +125,40 @@ struct CPU {
     std::vector<uint8_t> memory;
     std::stack<uint16_t> stack;
     uint16_t registers[16];
-    uint16_t PC;
-    uint16_t I;
+    uint16_t PC = 0;
+    uint16_t I = 0;
     bool DT = 0;
 
-    CPU(GPU&, InputHandler&);
-    void dump_into_memory(std::vector<uint8_t>);
+    CPU(GPU& graphics_handler, InputHandler& input_handler) : gpu(graphics_handler), input(input_handler) {};
+    void init();
+    void dump_into_memory(const std::string);
     uint16_t fetch_instruction();
     void execute(uint16_t);
     void cycle();
 };
 
-CPU::CPU(GPU& graphics_handler, InputHandler& input_handler) : gpu(graphics_handler), input(input_handler) {
-    for(size_t index = 0; index < sizeof(this->registers) / sizeof(int16_t); index++)
-        this->registers[index] = 0;
+void CPU::init() {
+    std::memset(this->registers, 0, 0xf);
+    std::srand(std::time(NULL));
 }
 
-void CPU::dump_into_memory(const std::vector<uint8_t> bytes) {
-    for(size_t index = 0; index < bytes.size(); index++)
-        this->memory.push_back(bytes.at(index));
-    this->PC = 0;
+void CPU::dump_into_memory(const std::string file_path) {
+    const auto extension = file_path.substr(file_path.find_last_of('.'));
+    if(extension != ".ch8") {
+        throw std::runtime_error(std::format("file extension not supported: {}\n", extension));
+    }
+
+    std::ifstream file(file_path, std::ios::binary);
+    if(!file.is_open()) {
+        throw std::runtime_error(std::format("could not open rom: {}\n", file_path));
+    }
+
+    char byte;
+    while(file.get(byte)) {
+        this->memory.push_back(byte);
+    }
+
+    file.close();
 }
 
 uint16_t CPU::fetch_instruction() {
@@ -269,32 +284,6 @@ void CPU::cycle() {
     this->DT = 0;
 }
 
-struct Reader {
-    std::ifstream target;
-    size_t index = 0;
-
-    Reader(std::string);
-    std::vector<uint8_t> extract_bytes();
-};
-
-Reader::Reader(const std::string file_path) {
-    const auto extension = file_path.substr(file_path.find_last_of('.'));
-    if(extension != ".ch8")
-        throw std::runtime_error(std::format("file extension not supported: {}\n", extension));
-
-    this->target.open(file_path, std::ios::binary);
-    if(!this->target.is_open())
-        throw std::runtime_error(std::format("could not open rom: {}\n", file_path));
-}
-
-std::vector<uint8_t> Reader::extract_bytes() {
-    std::vector<uint8_t> bytes;
-    char byte;
-    while(this->target.get(byte))
-        bytes.push_back(static_cast<uint8_t>(byte));
-    return bytes;
-}
-
 int32_t main(int32_t argc, char* argv[]) {
     if(argc < 2) {
         std::cout << std::format("Usage: {} [ROM]\n", argv[0]);
@@ -302,7 +291,6 @@ int32_t main(int32_t argc, char* argv[]) {
     }
 
     const auto file_path = std::string(argv[1]);
-    Reader reader(file_path);
 
     sf::RenderWindow screen(sf::VideoMode(64 * SCALE_FACTOR, 32 * SCALE_FACTOR), "octopus");
 
@@ -310,7 +298,7 @@ int32_t main(int32_t argc, char* argv[]) {
     InputHandler input_handler(screen);
 
     CPU processor(graphics_handler, input_handler);
-    processor.dump_into_memory(reader.extract_bytes());
+    processor.dump_into_memory(file_path);
 
     while(screen.isOpen()) {
         sf::Event event;

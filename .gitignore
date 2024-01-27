@@ -1,4 +1,5 @@
-bin
-subprojects/packagecache
-subprojects/SFML-*
-files
+bin/
+debug/
+subprojects/packagecache/
+subprojects/SFML-*/
+files/

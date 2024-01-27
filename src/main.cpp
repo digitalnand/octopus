@@ -20,6 +20,12 @@
 #define DEFAULT_COLOR sf::Color(30, 144, 255)
 #define EMPTY_COLOR sf::Color::Black
 
+#ifdef DEBUG
+#define debug_log(...) std::printf(__VA_ARGS__)
+#else
+#define debug_log(...)
+#endif
+
 std::map<uint16_t, sf::Keyboard::Key> KEYMAP = {
     {5, sf::Keyboard::W},
     {7, sf::Keyboard::A},
@@ -175,12 +181,14 @@ uint16_t CPU::fetch_instruction() {
 
 void CPU::execute(const uint16_t instruction) {
     const uint16_t kind = (instruction & 0xf000) >> 12;
+    debug_log("instruction: %x\n", instruction);
     switch(kind) {
         case 0x0:
         {
             switch(instruction) {
                 case 0x00E0: // CLS
                     this->gpu.clear_framebuffer();
+                    debug_log("CLS\n");
                 break;
 
                 case 0x00EE: // RET
@@ -189,6 +197,7 @@ void CPU::execute(const uint16_t instruction) {
                     }
                     this->PC = this->stack.top();
                     this->stack.pop();
+                    debug_log("RET %x\n", this->PC);
                 break;
 
                 default: break; // SYS address
@@ -198,6 +207,7 @@ void CPU::execute(const uint16_t instruction) {
         case 0x1: { // JP address
             const uint16_t address = (instruction & 0x0fff) - PROGRAMS_START;
             this->PC = address;
+            debug_log("JP %x\n", address);
         } break;
 
         case 0x2: { // CALL address
@@ -207,6 +217,7 @@ void CPU::execute(const uint16_t instruction) {
             const uint16_t address = (instruction & 0x0fff) - PROGRAMS_START;
             this->stack.push(this->PC);
             this->PC = address;
+            debug_log("CALL %x\n", address);
         } break;
 
         case 0x3: { // SE Vx, value
@@ -215,6 +226,7 @@ void CPU::execute(const uint16_t instruction) {
             if(this->registers[target] == value) {
                 this->PC += INSTRUCTIONS_SPAN;
             }
+            debug_log("SE V%x, %x\n", target, value);
         } break;
 
         case 0x4: { // SNE Vx, value
@@ -223,18 +235,21 @@ void CPU::execute(const uint16_t instruction) {
             if(this->registers[target] != value) {
                 this->PC += INSTRUCTIONS_SPAN;
             }
+            debug_log("SE V%x, %x\n", target, value);
         } break;
 
         case 0x6: { // LD Vx, value
             const uint16_t target = (instruction & 0x0f00) >> 8;
             const uint16_t value = instruction & 0x00ff;
             this->registers[target] = value;
+            debug_log("LD V%x, %x\n", target, value);
         } break;
 
         case 0x7: { // ADD Vx, value
             const uint16_t target = (instruction & 0x0f00) >> 8;
             const uint16_t value = instruction & 0x00ff;
             this->registers[target] += value;
+            debug_log("ADD V%x, %x\n", target, value);
         } break;
 
         case 0x8:
@@ -245,6 +260,7 @@ void CPU::execute(const uint16_t instruction) {
                     const uint16_t target = (instruction & 0x0f00) >> 8;
                     const uint16_t source = (instruction & 0x00f0) >> 4;
                     this->registers[target] = this->registers[source];
+                    debug_log("LD V%x, V%x\n", target, source);
                 } break;
 
                 case 0x5: { // SUB Vx, Vy
@@ -252,6 +268,7 @@ void CPU::execute(const uint16_t instruction) {
                     const uint16_t source = (instruction & 0x00f0) >> 4;
                     this->registers[0xf] = (this->registers[target] > this->registers[source]) ? 1 : 0;
                     this->registers[target] -= this->registers[source];
+                    debug_log("SUB V%x, V%x\n", target, source);
                 } break;
 
                 default: throw std::runtime_error("not implemented yet\n");
@@ -261,11 +278,12 @@ void CPU::execute(const uint16_t instruction) {
         case 0xA: { // LD I, address
             const uint16_t address = (instruction & 0x0fff) - PROGRAMS_START;
             this->I = address;
+            debug_log("LD I, %x\n", address);
         } break;
 
         case 0xD: { // DRW Vx, Vy, length
-            const auto x = this->registers[(instruction & 0x0f00) >> 8];
-            const auto y = this->registers[(instruction & 0x00f0) >> 4];
+            const auto x = (instruction & 0x0f00) >> 8;
+            const auto y = (instruction & 0x00f0) >> 4;
             const uint16_t length = instruction & 0x000f;
 
             std::vector<uint8_t> sprite;
@@ -273,8 +291,9 @@ void CPU::execute(const uint16_t instruction) {
                 sprite.push_back(this->memory[this->I + byte]);
             }
 
-            const auto overlapping = this->gpu.copy_to_framebuffer(x, y, sprite);
+            const auto overlapping = this->gpu.copy_to_framebuffer(this->registers[x], this->registers[y], sprite);
             this->registers[0xf] = (overlapping) ? 1 : 0;
+            debug_log("DRW V%x, V%x, %x\n", x, y, length);
         } break;
 
         case 0xE:
@@ -282,10 +301,12 @@ void CPU::execute(const uint16_t instruction) {
             const uint16_t low_byte = instruction & 0x00ff;
             switch(low_byte) {
                 case 0xA1: { // SKNP Vx
-                    const auto key_code = this->registers[(instruction & 0x0f00) >> 8];
+                    const auto source = (instruction & 0x0f00) >> 8;
+                    const auto key_code = this->registers[source];
                     if(!this->input.check_for_keypress(key_code)) {
                         this->PC += INSTRUCTIONS_SPAN;
                     }
+                    debug_log("SKNP V%x\n", source);
                 } break;
 
                 default: throw std::runtime_error("not implemented yet\n");
@@ -299,16 +320,19 @@ void CPU::execute(const uint16_t instruction) {
                 case 0x07: { // LD Vx, DT
                     const uint16_t target = (instruction & 0x0f00) >> 8;
                     this->registers[target] = this->DT;
+                    debug_log("LD V%x, DT\n", target);
                 } break;
 
                 case 0x0A: { // LD Vx, K
                     const uint16_t target = (instruction & 0x0f00) >> 8;
                     this->registers[target] = this->input.wait_for_keypress();
+                    debug_log("LD V%x, %x\n", target, this->registers[target]);
                 } break;
 
                 case 0x15: { // LD DT, Vx
                     const uint16_t source = (instruction & 0x0f00) >> 8;
                     this->DT = this->registers[source];
+                    debug_log("LD DT, V%x\n", source);
                 } break;
 
                 case 0x65: { // LD Vx, [I]
@@ -316,6 +340,7 @@ void CPU::execute(const uint16_t instruction) {
                     for(size_t index = 0; index <= end; index++) {
                         this->registers[index] = this->memory[this->I + index];
                     }
+                    debug_log("LD [V0...V%x] I\n", end);
                 } break;
 
                 default: throw std::runtime_error("not implemented yet\n");

@@ -338,7 +338,7 @@ void CPU::cycle() {
 int32_t main(int32_t argc, char* argv[]) {
     if(argc < 2) {
         std::cout << std::format("Usage: {} [ROM]\n", argv[0]);
-        exit(1);
+        return 1;
     }
 
     const auto file_path = std::string(argv[1]);

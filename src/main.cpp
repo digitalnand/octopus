@@ -357,7 +357,6 @@ void CPU::cycle() {
         return;
     }
     this->execute(instruction);
-    this->DT = 0;
 }
 
 int32_t main(int32_t argc, char* argv[]) {
@@ -379,11 +378,16 @@ int32_t main(int32_t argc, char* argv[]) {
 
     while(screen.isOpen()) {
         sf::Event event;
-        while(screen.pollEvent(event))
-            if(event.type == sf::Event::Closed) screen.close();
+        while(screen.pollEvent(event)) {
+            if(event.type == sf::Event::Closed) {
+                screen.close();
+            }
+        }
 
         processor.cycle();
         graphics_handler.draw();
+
+        processor.DT = 0;
 
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }

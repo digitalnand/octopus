@@ -31,6 +31,3 @@ build target:
     fi
 
     meson compile -C $dir
-
-run:
-    bin/octop

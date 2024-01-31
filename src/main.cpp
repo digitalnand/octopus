@@ -16,25 +16,20 @@
 #define PROGRAMS_START 0x200
 #define OPCODE_SPAN 2
 
-#define KEY_UP 1
-#define KEY_DOWN 0
-
 #define SCALE_FACTOR 10
 #define DEFAULT_COLOR sf::Color(30, 144, 255)
 #define EMPTY_COLOR sf::Color::Black
+
+#define FRAMERATE 1
+
+#define KEY_UP 1
+#define KEY_DOWN 0
 
 #ifdef DEBUG
 #define debug_log(...) std::printf(__VA_ARGS__)
 #else
 #define debug_log(...)
 #endif
-
-std::map<sf::Keyboard::Key, uint16_t> KEYMAP = {
-    {sf::Keyboard::W, 5},
-    {sf::Keyboard::A, 7},
-    {sf::Keyboard::S, 8},
-    {sf::Keyboard::D, 9},
-};
 
 struct GPU {
     sf::RenderWindow& active_screen;
@@ -43,7 +38,7 @@ struct GPU {
     sf::Sprite drawable_graphics;
 
     GPU(sf::RenderWindow&);
-    bool copy_to_framebuffer(const uint16_t, const uint16_t, const std::vector<uint8_t>);
+    uint16_t copy_to_framebuffer(const uint16_t, const uint16_t, const std::vector<uint8_t>);
     void clear_framebuffer();
     void draw();
 };
@@ -56,18 +51,18 @@ GPU::GPU(sf::RenderWindow& screen) : active_screen(screen) {
     this->drawable_graphics.setTexture(this->graphics);
 }
 
-bool GPU::copy_to_framebuffer(const uint16_t default_x, const uint16_t default_y, const std::vector<uint8_t> sprite) {
-    bool overlapping = false;
+uint16_t GPU::copy_to_framebuffer(const uint16_t default_x, const uint16_t default_y, const std::vector<uint8_t> sprite) {
+    uint16_t overlapping = 0;
 
     for(size_t pixel_y = 0; pixel_y < sprite.size(); pixel_y++) {
-        const auto row = sprite[pixel_y];
-
+        const auto byte = sprite[pixel_y];
         for(size_t bit_index = 8; bit_index > 0; bit_index--) {
             const size_t pixel_x = (bit_index % 8);
-            const uint8_t current_pixel = (row >> pixel_x) & 0x1;
+            const uint8_t current_pixel = (byte >> pixel_x) & 0x1;
 
-            if(current_pixel == 0)
+            if(current_pixel == 0) {
                 continue;
+            }
 
             const auto x = (default_x + pixel_x) % 64;
             const auto y = (default_y + pixel_y) % 32;
@@ -76,7 +71,7 @@ bool GPU::copy_to_framebuffer(const uint16_t default_x, const uint16_t default_y
                 this->framebuffer.setPixel(x, y, DEFAULT_COLOR);
             } else {
                 this->framebuffer.setPixel(x, y, EMPTY_COLOR);
-                overlapping = true;
+                overlapping = 1;
             }
         }
     }
@@ -85,9 +80,11 @@ bool GPU::copy_to_framebuffer(const uint16_t default_x, const uint16_t default_y
 }
 
 void GPU::clear_framebuffer() {
-    for(size_t y = 0; y < 32; y++)
-        for(size_t x = 0; x < 64; x++)
+    for(size_t y = 0; y < 32; y++) {
+        for(size_t x = 0; x < 64; x++) {
             this->framebuffer.setPixel(x, y, EMPTY_COLOR);
+        }
+    }
 }
 
 void GPU::draw() {
@@ -103,12 +100,12 @@ struct CPU {
     std::stack<uint16_t> stack;
 
     uint16_t v[16];
-    uint16_t pc = 0;
-    uint16_t i = 0;
-    bool dt = 0;
+    uint16_t pc;
+    uint16_t i;
+    bool dt;
 
     bool blocked = false;
-    std::map<uint16_t, uint16_t> keys = {
+    std::map<uint8_t, uint8_t> keys = {
         {5, KEY_DOWN},
         {7, KEY_DOWN},
         {8, KEY_DOWN},
@@ -125,6 +122,9 @@ struct CPU {
 
 void CPU::init() {
     std::memset(this->v, 0, 0xf);
+    this->pc = 0;
+    this->i = 0;
+    this->dt = 0;
     std::srand(std::time(NULL));
 }
 
@@ -303,7 +303,7 @@ void CPU::execute(const uint16_t opcode) {
                         this->v[target] = code;
                         this->blocked = false;
                     }
-                    debug_log("LD V%x, %x\n", target, this->registers[target]);
+                    debug_log("LD V%x, %x\n", target, this->v[target]);
                 } break;
 
                 case 0x15: { // LD DT, Vx
@@ -361,7 +361,14 @@ int32_t main(int32_t argc, char* argv[]) {
                 break;
 
                 case sf::Event::KeyPressed: {
-                    const auto key_code = KEYMAP[event.key.code];
+                    int8_t key_code = -1;
+                    switch(event.key.code) {
+                        case sf::Keyboard::W: key_code = 5; break;
+                        case sf::Keyboard::A: key_code = 7; break;
+                        case sf::Keyboard::S: key_code = 8; break;
+                        case sf::Keyboard::D: key_code = 9; break;
+                        default: key_code = -1;
+                    }
                     if(!processor.keys.contains(key_code)) break;
                     processor.keys[key_code] = KEY_UP;
                 } break;
@@ -374,7 +381,7 @@ int32_t main(int32_t argc, char* argv[]) {
         graphics_handler.draw();
 
         processor.dt = 0;
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        std::this_thread::sleep_for(std::chrono::milliseconds(FRAMERATE));
     }
 
     return 0;

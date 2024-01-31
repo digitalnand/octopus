@@ -14,9 +14,12 @@
 #include <SFML/Graphics.hpp>
 
 #define PROGRAMS_START 0x200
-#define INSTRUCTIONS_SPAN 2
-#define SCALE_FACTOR 10
+#define INSTRUCTION_SPAN 2
 
+#define KEY_UP 1
+#define KEY_DOWN 0
+
+#define SCALE_FACTOR 10
 #define DEFAULT_COLOR sf::Color(30, 144, 255)
 #define EMPTY_COLOR sf::Color::Black
 
@@ -26,11 +29,11 @@
 #define debug_log(...)
 #endif
 
-std::map<uint16_t, sf::Keyboard::Key> KEYMAP = {
-    {5, sf::Keyboard::W},
-    {7, sf::Keyboard::A},
-    {8, sf::Keyboard::S},
-    {9, sf::Keyboard::D},
+std::map<sf::Keyboard::Key, uint16_t> KEYMAP = {
+    {sf::Keyboard::W, 5},
+    {sf::Keyboard::A, 7},
+    {sf::Keyboard::S, 8},
+    {sf::Keyboard::D, 9},
 };
 
 struct GPU {
@@ -93,40 +96,8 @@ void GPU::draw() {
     this->active_screen.display();
 }
 
-struct InputHandler {
-    sf::RenderWindow& active_window;
-    InputHandler(sf::RenderWindow& window) : active_window(window) {};
-    uint16_t wait_for_keypress();
-    bool check_for_keypress(uint16_t);
-};
-
-uint16_t InputHandler::wait_for_keypress() {
-    sf::Keyboard::Key pressed_key = sf::Keyboard::Unknown;
-
-    while(true) {
-        sf::Event event;
-        this->active_window.pollEvent(event);
-        if(event.type == sf::Event::KeyPressed) {
-            pressed_key = event.key.code;
-            break;
-        }
-    }
-
-    for(const auto& [key_code, key] : KEYMAP) {
-        if(pressed_key == key)
-            return key_code;
-    }
-
-    return 0;
-}
-
-bool InputHandler::check_for_keypress(const uint16_t key_code) {
-    return sf::Keyboard::isKeyPressed(KEYMAP[key_code]);
-}
-
 struct CPU {
     GPU& gpu;
-    InputHandler input;
 
     std::vector<uint8_t> memory;
     std::stack<uint16_t> stack;
@@ -135,7 +106,15 @@ struct CPU {
     uint16_t I = 0;
     bool DT = 0;
 
-    CPU(GPU& graphics_handler, InputHandler& input_handler) : gpu(graphics_handler), input(input_handler) {};
+    bool blocked = false;
+    std::map<uint16_t, uint16_t> keys = {
+        {5, KEY_DOWN},
+        {7, KEY_DOWN},
+        {8, KEY_DOWN},
+        {9, KEY_DOWN}
+    };
+
+    CPU(GPU& graphics_handler) : gpu(graphics_handler) {};
     void init();
     void dump_into_memory(const std::string);
     uint16_t fetch_instruction();
@@ -175,7 +154,7 @@ uint16_t CPU::fetch_instruction() {
     const auto high_byte = this->memory.at(this->PC);
     const auto low_byte = this->memory.at(this->PC + 1);
 
-    this->PC += INSTRUCTIONS_SPAN;
+    this->PC += INSTRUCTION_SPAN;
     return (high_byte << 0x8) + low_byte;
 }
 
@@ -192,9 +171,7 @@ void CPU::execute(const uint16_t instruction) {
                 break;
 
                 case 0x00EE: // RET
-                    if(this->stack.empty()) {
-                        throw std::runtime_error("could not return from subroutine, stack was empty\n");
-                    }
+                    if(this->stack.empty()) throw std::runtime_error("could not return from subroutine, stack was empty\n");
                     this->PC = this->stack.top();
                     this->stack.pop();
                     debug_log("RET %x\n", this->PC);
@@ -211,9 +188,7 @@ void CPU::execute(const uint16_t instruction) {
         } break;
 
         case 0x2: { // CALL address
-            if(this->stack.size() > 0xf) {
-                throw std::runtime_error("stack overflow\n");
-            }
+            if(this->stack.size() > 0xf) throw std::runtime_error("stack overflow\n");
             const uint16_t address = (instruction & 0x0fff) - PROGRAMS_START;
             this->stack.push(this->PC);
             this->PC = address;
@@ -223,18 +198,14 @@ void CPU::execute(const uint16_t instruction) {
         case 0x3: { // SE Vx, value
             const uint16_t target = (instruction & 0x0f00) >> 8;
             const uint16_t value = instruction & 0x00ff;
-            if(this->registers[target] == value) {
-                this->PC += INSTRUCTIONS_SPAN;
-            }
+            if(this->registers[target] == value) this->PC += INSTRUCTION_SPAN;
             debug_log("SE V%x, %x\n", target, value);
         } break;
 
         case 0x4: { // SNE Vx, value
             const uint16_t target = (instruction & 0x0f00) >> 8;
             const uint16_t value = instruction & 0x00ff;
-            if(this->registers[target] != value) {
-                this->PC += INSTRUCTIONS_SPAN;
-            }
+            if(this->registers[target] != value) this->PC += INSTRUCTION_SPAN;
             debug_log("SE V%x, %x\n", target, value);
         } break;
 
@@ -282,8 +253,8 @@ void CPU::execute(const uint16_t instruction) {
         } break;
 
         case 0xD: { // DRW Vx, Vy, length
-            const auto x = (instruction & 0x0f00) >> 8;
-            const auto y = (instruction & 0x00f0) >> 4;
+            const uint16_t x = (instruction & 0x0f00) >> 8;
+            const uint16_t y = (instruction & 0x00f0) >> 4;
             const uint16_t length = instruction & 0x000f;
 
             std::vector<uint8_t> sprite;
@@ -301,11 +272,11 @@ void CPU::execute(const uint16_t instruction) {
             const uint16_t low_byte = instruction & 0x00ff;
             switch(low_byte) {
                 case 0xA1: { // SKNP Vx
-                    const auto source = (instruction & 0x0f00) >> 8;
-                    const auto key_code = this->registers[source];
-                    if(!this->input.check_for_keypress(key_code)) {
-                        this->PC += INSTRUCTIONS_SPAN;
-                    }
+                    const uint16_t source = (instruction & 0x0f00) >> 8;
+                    auto& key_state = this->keys[this->registers[source]];
+                    if(key_state == KEY_DOWN) {
+                        this->PC += INSTRUCTION_SPAN;
+                    } else key_state = KEY_DOWN;
                     debug_log("SKNP V%x\n", source);
                 } break;
 
@@ -325,7 +296,12 @@ void CPU::execute(const uint16_t instruction) {
 
                 case 0x0A: { // LD Vx, K
                     const uint16_t target = (instruction & 0x0f00) >> 8;
-                    this->registers[target] = this->input.wait_for_keypress();
+                    this->blocked = true;
+                    for(const auto& [code, state] : this->keys) {
+                        if(state == KEY_DOWN) continue;
+                        this->registers[target] = code;
+                        this->blocked = false;
+                    }
                     debug_log("LD V%x, %x\n", target, this->registers[target]);
                 } break;
 
@@ -352,11 +328,11 @@ void CPU::execute(const uint16_t instruction) {
 }
 
 void CPU::cycle() {
-    const uint16_t instruction = this->fetch_instruction();
-    if(instruction == '\0') {
-        return;
-    }
+    const auto instruction = this->fetch_instruction();
+    if(instruction == '\0') return;
+
     this->execute(instruction);
+    if(this->blocked) this->PC -= 2; // go back to the last instruction
 }
 
 int32_t main(int32_t argc, char* argv[]) {
@@ -370,17 +346,26 @@ int32_t main(int32_t argc, char* argv[]) {
     sf::RenderWindow screen(sf::VideoMode(64 * SCALE_FACTOR, 32 * SCALE_FACTOR), "octopus");
 
     GPU graphics_handler(screen);
-    InputHandler input_handler(screen);
 
-    CPU processor(graphics_handler, input_handler);
+    CPU processor(graphics_handler);
     processor.init();
     processor.dump_into_memory(file_path);
 
     while(screen.isOpen()) {
         sf::Event event;
         while(screen.pollEvent(event)) {
-            if(event.type == sf::Event::Closed) {
-                screen.close();
+            switch(event.type) {
+                case sf::Event::Closed:
+                    screen.close();
+                break;
+
+                case sf::Event::KeyPressed: {
+                    const auto key_code = KEYMAP[event.key.code];
+                    if(!processor.keys.contains(key_code)) break;
+                    processor.keys[key_code] = KEY_UP;
+                } break;
+
+                default: break;
             }
         }
 
@@ -388,7 +373,6 @@ int32_t main(int32_t argc, char* argv[]) {
         graphics_handler.draw();
 
         processor.DT = 0;
-
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 

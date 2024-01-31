@@ -31,6 +31,27 @@
 #define debug_log(...)
 #endif
 
+#define FONT_LENGTH 5
+const uint8_t fontset[80] =
+{
+    0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+    0x20, 0x60, 0x20, 0x20, 0x70, // 1
+    0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+    0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+    0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+    0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+    0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+    0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+    0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+    0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+    0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+    0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+    0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+    0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+    0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+    0xF0, 0x80, 0xF0, 0x80, 0x80  // F
+};
+
 struct GPU {
     sf::RenderWindow& active_screen;
     sf::Image framebuffer;
@@ -56,13 +77,10 @@ uint16_t GPU::copy_to_framebuffer(const uint16_t default_x, const uint16_t defau
 
     for(size_t pixel_y = 0; pixel_y < sprite.size(); pixel_y++) {
         const auto byte = sprite[pixel_y];
-        for(size_t bit_index = 8; bit_index > 0; bit_index--) {
-            const size_t pixel_x = (bit_index % 8);
-            const uint8_t current_pixel = (byte >> pixel_x) & 0x1;
-
-            if(current_pixel == 0) {
-                continue;
-            }
+        for(int32_t bit_index = 8; bit_index >= 0; bit_index--) {
+            const auto pixel_x = 8 - bit_index;
+            const auto current_pixel = (byte >> bit_index) & 0x01;
+            if(current_pixel == 0) continue;
 
             const auto x = (default_x + pixel_x) % 64;
             const auto y = (default_y + pixel_y) % 32;
@@ -96,7 +114,7 @@ void GPU::draw() {
 struct CPU {
     GPU& gpu;
 
-    std::vector<uint8_t> ram;
+    uint8_t ram[4096];
     std::stack<uint16_t> stack;
 
     uint16_t v[16];
@@ -121,10 +139,14 @@ struct CPU {
 };
 
 void CPU::init() {
+    std::memset(this->ram, 0, 4096);
+    std::memcpy(this->ram, fontset, sizeof(fontset) / sizeof(uint8_t));
+
     std::memset(this->v, 0, 0xf);
-    this->pc = 0;
+    this->pc = 0x200;
     this->i = 0;
     this->dt = 0;
+
     std::srand(std::time(NULL));
 }
 
@@ -139,21 +161,19 @@ void CPU::dump_into_memory(const std::string file_path) {
         throw std::runtime_error(std::format("could not open rom: {}\n", file_path));
     }
 
+    size_t index = 0;
     char byte;
     while(file.get(byte)) {
-        this->ram.push_back(static_cast<uint8_t>(byte));
+        this->ram[this->pc + index] = static_cast<uint8_t>(byte);
+        index++;
     }
 
     file.close();
 }
 
 uint16_t CPU::fetch_opcode() {
-    if(this->pc + 1 >= static_cast<uint16_t>(this->ram.size())) {
-        return '\0';
-    }
-
-    const auto high_byte = this->ram.at(this->pc);
-    const auto low_byte = this->ram.at(this->pc + 1);
+    const auto high_byte = this->ram[this->pc];
+    const auto low_byte = this->ram[this->pc + 1];
 
     this->pc += OPCODE_SPAN;
     return (high_byte << 0x8) + low_byte;
@@ -183,14 +203,14 @@ void CPU::execute(const uint16_t opcode) {
         } break;
 
         case 0x1: { // JP address
-            const uint16_t address = (opcode & 0x0fff) - PROGRAMS_START;
+            const uint16_t address = opcode & 0x0fff;
             this->pc = address;
             debug_log("JP %x\n", address);
         } break;
 
         case 0x2: { // CALL address
             if(this->stack.size() > 0xf) throw std::runtime_error("stack overflow\n");
-            const uint16_t address = (opcode & 0x0fff) - PROGRAMS_START;
+            const uint16_t address = opcode & 0x0fff;
             this->stack.push(this->pc);
             this->pc = address;
             debug_log("CALL %x\n", address);
@@ -248,7 +268,7 @@ void CPU::execute(const uint16_t opcode) {
         } break;
 
         case 0xA: { // LD I, address
-            const uint16_t address = (opcode & 0x0fff) - PROGRAMS_START;
+            const uint16_t address = opcode & 0x0fff;
             this->i = address;
             debug_log("LD I, %x\n", address);
         } break;
@@ -310,6 +330,31 @@ void CPU::execute(const uint16_t opcode) {
                     const uint16_t source = (opcode & 0x0f00) >> 8;
                     this->dt = this->v[source];
                     debug_log("LD DT, V%x\n", source);
+                } break;
+
+                case 0x29: { // LD F, VX
+                    const uint16_t source = (opcode & 0x0f00) >> 8;
+                    this->i = this->v[source] * FONT_LENGTH;
+                    debug_log("LD F, V%x\n", source);
+                } break;
+
+                case 0x33: { // LD B, Vx
+                    const uint16_t source = (opcode & 0x0f00) >> 8;
+                    const uint16_t hundreds = this->v[source] / 100;
+                    const uint16_t tens = (this->v[source] - hundreds * 100) / 10;
+                    const uint16_t ones = ((this->v[source] - hundreds * 100) - tens) * 10;
+                    this->ram[this->i] = hundreds;
+                    this->ram[this->i + 1] = tens;
+                    this->ram[this->i + 2] = ones;
+                    debug_log("LD B, V%x\n", source);
+                } break;
+
+                case 0x55: { // LD [I], VX
+                    const uint16_t end = (opcode & 0x0f00) >> 8;
+                    for(size_t index = 0; index <= end; index++) {
+                        this->ram[this->i + index] = this->v[index];
+                    }
+                    debug_log("LD I [V0...V%x]\n", end);
                 } break;
 
                 case 0x65: { // LD Vx, [I]

@@ -14,7 +14,7 @@
 #include <SFML/Graphics.hpp>
 
 #define PROGRAMS_START 0x200
-#define INSTRUCTION_SPAN 2
+#define OPCODE_SPAN 2
 
 #define KEY_UP 1
 #define KEY_DOWN 0
@@ -99,12 +99,13 @@ void GPU::draw() {
 struct CPU {
     GPU& gpu;
 
-    std::vector<uint8_t> memory;
+    std::vector<uint8_t> ram;
     std::stack<uint16_t> stack;
-    uint16_t registers[16];
-    uint16_t PC = 0;
-    uint16_t I = 0;
-    bool DT = 0;
+
+    uint16_t v[16];
+    uint16_t pc = 0;
+    uint16_t i = 0;
+    bool dt = 0;
 
     bool blocked = false;
     std::map<uint16_t, uint16_t> keys = {
@@ -117,13 +118,13 @@ struct CPU {
     CPU(GPU& graphics_handler) : gpu(graphics_handler) {};
     void init();
     void dump_into_memory(const std::string);
-    uint16_t fetch_instruction();
+    uint16_t fetch_opcode();
     void execute(uint16_t);
     void cycle();
 };
 
 void CPU::init() {
-    std::memset(this->registers, 0, 0xf);
+    std::memset(this->v, 0, 0xf);
     std::srand(std::time(NULL));
 }
 
@@ -140,31 +141,31 @@ void CPU::dump_into_memory(const std::string file_path) {
 
     char byte;
     while(file.get(byte)) {
-        this->memory.push_back(byte);
+        this->ram.push_back(static_cast<uint8_t>(byte));
     }
 
     file.close();
 }
 
-uint16_t CPU::fetch_instruction() {
-    if(this->PC + 1 >= static_cast<uint16_t>(this->memory.size())) {
+uint16_t CPU::fetch_opcode() {
+    if(this->pc + 1 >= static_cast<uint16_t>(this->ram.size())) {
         return '\0';
     }
 
-    const auto high_byte = this->memory.at(this->PC);
-    const auto low_byte = this->memory.at(this->PC + 1);
+    const auto high_byte = this->ram.at(this->pc);
+    const auto low_byte = this->ram.at(this->pc + 1);
 
-    this->PC += INSTRUCTION_SPAN;
+    this->pc += OPCODE_SPAN;
     return (high_byte << 0x8) + low_byte;
 }
 
-void CPU::execute(const uint16_t instruction) {
-    const uint16_t kind = (instruction & 0xf000) >> 12;
-    debug_log("instruction: %x\n", instruction);
+void CPU::execute(const uint16_t opcode) {
+    const uint16_t kind = (opcode & 0xf000) >> 12;
+    debug_log("opcode: %x\n", opcode);
     switch(kind) {
         case 0x0:
         {
-            switch(instruction) {
+            switch(opcode) {
                 case 0x00E0: // CLS
                     this->gpu.clear_framebuffer();
                     debug_log("CLS\n");
@@ -172,9 +173,9 @@ void CPU::execute(const uint16_t instruction) {
 
                 case 0x00EE: // RET
                     if(this->stack.empty()) throw std::runtime_error("could not return from subroutine, stack was empty\n");
-                    this->PC = this->stack.top();
+                    this->pc = this->stack.top();
                     this->stack.pop();
-                    debug_log("RET %x\n", this->PC);
+                    debug_log("RET %x\n", this->pc);
                 break;
 
                 default: break; // SYS address
@@ -182,63 +183,63 @@ void CPU::execute(const uint16_t instruction) {
         } break;
 
         case 0x1: { // JP address
-            const uint16_t address = (instruction & 0x0fff) - PROGRAMS_START;
-            this->PC = address;
+            const uint16_t address = (opcode & 0x0fff) - PROGRAMS_START;
+            this->pc = address;
             debug_log("JP %x\n", address);
         } break;
 
         case 0x2: { // CALL address
             if(this->stack.size() > 0xf) throw std::runtime_error("stack overflow\n");
-            const uint16_t address = (instruction & 0x0fff) - PROGRAMS_START;
-            this->stack.push(this->PC);
-            this->PC = address;
+            const uint16_t address = (opcode & 0x0fff) - PROGRAMS_START;
+            this->stack.push(this->pc);
+            this->pc = address;
             debug_log("CALL %x\n", address);
         } break;
 
         case 0x3: { // SE Vx, value
-            const uint16_t target = (instruction & 0x0f00) >> 8;
-            const uint16_t value = instruction & 0x00ff;
-            if(this->registers[target] == value) this->PC += INSTRUCTION_SPAN;
+            const uint16_t target = (opcode & 0x0f00) >> 8;
+            const uint16_t value = opcode & 0x00ff;
+            if(this->v[target] == value) this->pc += OPCODE_SPAN;
             debug_log("SE V%x, %x\n", target, value);
         } break;
 
         case 0x4: { // SNE Vx, value
-            const uint16_t target = (instruction & 0x0f00) >> 8;
-            const uint16_t value = instruction & 0x00ff;
-            if(this->registers[target] != value) this->PC += INSTRUCTION_SPAN;
+            const uint16_t target = (opcode & 0x0f00) >> 8;
+            const uint16_t value = opcode & 0x00ff;
+            if(this->v[target] != value) this->pc += OPCODE_SPAN;
             debug_log("SE V%x, %x\n", target, value);
         } break;
 
         case 0x6: { // LD Vx, value
-            const uint16_t target = (instruction & 0x0f00) >> 8;
-            const uint16_t value = instruction & 0x00ff;
-            this->registers[target] = value;
+            const uint16_t target = (opcode & 0x0f00) >> 8;
+            const uint16_t value = opcode & 0x00ff;
+            this->v[target] = value;
             debug_log("LD V%x, %x\n", target, value);
         } break;
 
         case 0x7: { // ADD Vx, value
-            const uint16_t target = (instruction & 0x0f00) >> 8;
-            const uint16_t value = instruction & 0x00ff;
-            this->registers[target] += value;
+            const uint16_t target = (opcode & 0x0f00) >> 8;
+            const uint16_t value = opcode & 0x00ff;
+            this->v[target] += value;
             debug_log("ADD V%x, %x\n", target, value);
         } break;
 
         case 0x8:
         {
-            const uint16_t nibble = instruction & 0x000f;
+            const uint16_t nibble = opcode & 0x000f;
             switch(nibble) {
                 case 0x0: { // LD Vx, Vy
-                    const uint16_t target = (instruction & 0x0f00) >> 8;
-                    const uint16_t source = (instruction & 0x00f0) >> 4;
-                    this->registers[target] = this->registers[source];
+                    const uint16_t target = (opcode & 0x0f00) >> 8;
+                    const uint16_t source = (opcode & 0x00f0) >> 4;
+                    this->v[target] = this->v[source];
                     debug_log("LD V%x, V%x\n", target, source);
                 } break;
 
                 case 0x5: { // SUB Vx, Vy
-                    const uint16_t target = (instruction & 0x0f00) >> 8;
-                    const uint16_t source = (instruction & 0x00f0) >> 4;
-                    this->registers[0xf] = (this->registers[target] > this->registers[source]) ? 1 : 0;
-                    this->registers[target] -= this->registers[source];
+                    const uint16_t target = (opcode & 0x0f00) >> 8;
+                    const uint16_t source = (opcode & 0x00f0) >> 4;
+                    this->v[0xf] = (this->v[target] > this->v[source]) ? 1 : 0;
+                    this->v[target] -= this->v[source];
                     debug_log("SUB V%x, V%x\n", target, source);
                 } break;
 
@@ -247,35 +248,35 @@ void CPU::execute(const uint16_t instruction) {
         } break;
 
         case 0xA: { // LD I, address
-            const uint16_t address = (instruction & 0x0fff) - PROGRAMS_START;
-            this->I = address;
+            const uint16_t address = (opcode & 0x0fff) - PROGRAMS_START;
+            this->i = address;
             debug_log("LD I, %x\n", address);
         } break;
 
         case 0xD: { // DRW Vx, Vy, length
-            const uint16_t x = (instruction & 0x0f00) >> 8;
-            const uint16_t y = (instruction & 0x00f0) >> 4;
-            const uint16_t length = instruction & 0x000f;
+            const uint16_t x = (opcode & 0x0f00) >> 8;
+            const uint16_t y = (opcode & 0x00f0) >> 4;
+            const uint16_t length = opcode & 0x000f;
 
             std::vector<uint8_t> sprite;
             for(size_t byte = 0; byte < length; byte++) {
-                sprite.push_back(this->memory[this->I + byte]);
+                sprite.push_back(this->ram[this->i + byte]);
             }
 
-            const auto overlapping = this->gpu.copy_to_framebuffer(this->registers[x], this->registers[y], sprite);
-            this->registers[0xf] = (overlapping) ? 1 : 0;
+            const auto overlapping = this->gpu.copy_to_framebuffer(this->v[x], this->v[y], sprite);
+            this->v[0xf] = (overlapping) ? 1 : 0;
             debug_log("DRW V%x, V%x, %x\n", x, y, length);
         } break;
 
         case 0xE:
         {
-            const uint16_t low_byte = instruction & 0x00ff;
+            const uint16_t low_byte = opcode & 0x00ff;
             switch(low_byte) {
                 case 0xA1: { // SKNP Vx
-                    const uint16_t source = (instruction & 0x0f00) >> 8;
-                    auto& key_state = this->keys[this->registers[source]];
+                    const uint16_t source = (opcode & 0x0f00) >> 8;
+                    auto& key_state = this->keys[this->v[source]];
                     if(key_state == KEY_DOWN) {
-                        this->PC += INSTRUCTION_SPAN;
+                        this->pc += OPCODE_SPAN;
                     } else key_state = KEY_DOWN;
                     debug_log("SKNP V%x\n", source);
                 } break;
@@ -286,35 +287,35 @@ void CPU::execute(const uint16_t instruction) {
 
         case 0xF:
         {
-            const uint16_t low_byte = instruction & 0x00ff;
+            const uint16_t low_byte = opcode & 0x00ff;
             switch(low_byte) {
                 case 0x07: { // LD Vx, DT
-                    const uint16_t target = (instruction & 0x0f00) >> 8;
-                    this->registers[target] = this->DT;
+                    const uint16_t target = (opcode & 0x0f00) >> 8;
+                    this->v[target] = this->dt;
                     debug_log("LD V%x, DT\n", target);
                 } break;
 
                 case 0x0A: { // LD Vx, K
-                    const uint16_t target = (instruction & 0x0f00) >> 8;
+                    const uint16_t target = (opcode & 0x0f00) >> 8;
                     this->blocked = true;
                     for(const auto& [code, state] : this->keys) {
                         if(state == KEY_DOWN) continue;
-                        this->registers[target] = code;
+                        this->v[target] = code;
                         this->blocked = false;
                     }
                     debug_log("LD V%x, %x\n", target, this->registers[target]);
                 } break;
 
                 case 0x15: { // LD DT, Vx
-                    const uint16_t source = (instruction & 0x0f00) >> 8;
-                    this->DT = this->registers[source];
+                    const uint16_t source = (opcode & 0x0f00) >> 8;
+                    this->dt = this->v[source];
                     debug_log("LD DT, V%x\n", source);
                 } break;
 
                 case 0x65: { // LD Vx, [I]
-                    const uint16_t end = (instruction & 0x0f00) >> 8;
+                    const uint16_t end = (opcode & 0x0f00) >> 8;
                     for(size_t index = 0; index <= end; index++) {
-                        this->registers[index] = this->memory[this->I + index];
+                        this->v[index] = this->ram[this->i + index];
                     }
                     debug_log("LD [V0...V%x] I\n", end);
                 } break;
@@ -328,11 +329,11 @@ void CPU::execute(const uint16_t instruction) {
 }
 
 void CPU::cycle() {
-    const auto instruction = this->fetch_instruction();
-    if(instruction == '\0') return;
+    const auto opcode = this->fetch_opcode();
+    if(opcode == '\0') return;
 
-    this->execute(instruction);
-    if(this->blocked) this->PC -= 2; // go back to the last instruction
+    this->execute(opcode);
+    if(this->blocked) this->pc -= 2; // go back to the last instruction
 }
 
 int32_t main(int32_t argc, char* argv[]) {
@@ -372,7 +373,7 @@ int32_t main(int32_t argc, char* argv[]) {
         processor.cycle();
         graphics_handler.draw();
 
-        processor.DT = 0;
+        processor.dt = 0;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 

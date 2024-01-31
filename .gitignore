@@ -1,5 +1,5 @@
 bin/
 debug/
+roms/
 subprojects/packagecache/
 subprojects/SFML-*/
-files/

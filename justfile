@@ -9,10 +9,12 @@ setup target *FLAGS:
         exit
     fi
 
-    flags="{{FLAGS}} --buildtype={{target}}"
-    dir="{{builddir}}"
     if [[ "{{target}}" == "debug" ]]; then
+        flags="{{FLAGS}} --buildtype=debug"
         dir="{{debugdir}}"
+    else
+        flags="{{FLAGS}} --buildtype=plain"
+        dir="{{builddir}}"
     fi
 
     meson setup $flags $dir

@@ -13,14 +13,14 @@
 
 #include <SFML/Graphics.hpp>
 
-#define PROGRAMS_START 0x200
+#define PROGRAMS_OFFSET 0x200
 #define OPCODE_SPAN 2
 
+#define WIDTH 64
+#define HEIGHT 32
 #define SCALE_FACTOR 10
 #define DEFAULT_COLOR sf::Color(30, 144, 255)
 #define EMPTY_COLOR sf::Color::Black
-
-#define FRAMERATE 1
 
 #define KEY_UP 1
 #define KEY_DOWN 0
@@ -59,31 +59,31 @@ struct GPU {
     sf::Sprite drawable_graphics;
 
     GPU(sf::RenderWindow&);
-    uint16_t copy_to_framebuffer(const uint16_t, const uint16_t, const std::vector<uint8_t>);
+    uint8_t copy_to_framebuffer(const uint8_t, const uint8_t, const std::vector<uint8_t>);
     void clear_framebuffer();
     void draw();
 };
 
 GPU::GPU(sf::RenderWindow& screen) : active_screen(screen) {
-    this->framebuffer.create(64, 32);
-    this->graphics.create(64, 32);
+    this->framebuffer.create(WIDTH, HEIGHT);
+    this->graphics.create(WIDTH, HEIGHT);
 
     this->drawable_graphics.setScale(SCALE_FACTOR, SCALE_FACTOR);
     this->drawable_graphics.setTexture(this->graphics);
 }
 
-uint16_t GPU::copy_to_framebuffer(const uint16_t default_x, const uint16_t default_y, const std::vector<uint8_t> sprite) {
-    uint16_t overlapping = 0;
+uint8_t GPU::copy_to_framebuffer(const uint8_t default_x, const uint8_t default_y, const std::vector<uint8_t> sprite) {
+    uint8_t overlapping = 0;
 
-    for(size_t pixel_y = 0; pixel_y < sprite.size(); pixel_y++) {
+    for(int8_t pixel_y = 0; pixel_y < sprite.size(); pixel_y++) {
         const auto byte = sprite[pixel_y];
-        for(int32_t bit_index = 8; bit_index >= 0; bit_index--) {
-            const auto pixel_x = 8 - bit_index;
-            const auto current_pixel = (byte >> bit_index) & 0x01;
+        for(int8_t bit_index = 8; bit_index >= 0; bit_index--) {
+            const int8_t pixel_x = 8 - bit_index;
+            const int8_t current_pixel = (byte >> bit_index) & 0x01;
             if(current_pixel == 0) continue;
 
-            const auto x = (default_x + pixel_x) % 64;
-            const auto y = (default_y + pixel_y) % 32;
+            const int8_t x = (default_x + pixel_x) % WIDTH;
+            const int8_t y = (default_y + pixel_y) % HEIGHT;
 
             if(this->framebuffer.getPixel(x, y) == EMPTY_COLOR) {
                 this->framebuffer.setPixel(x, y, DEFAULT_COLOR);
@@ -98,8 +98,8 @@ uint16_t GPU::copy_to_framebuffer(const uint16_t default_x, const uint16_t defau
 }
 
 void GPU::clear_framebuffer() {
-    for(size_t y = 0; y < 32; y++) {
-        for(size_t x = 0; x < 64; x++) {
+    for(int8_t y = 0; y < HEIGHT; y++) {
+        for(int8_t x = 0; x < WIDTH; x++) {
             this->framebuffer.setPixel(x, y, EMPTY_COLOR);
         }
     }
@@ -117,18 +117,14 @@ struct CPU {
     uint8_t ram[4096];
     std::stack<uint16_t> stack;
 
-    uint16_t v[16];
+    uint8_t v[16];
     uint16_t pc;
     uint16_t i;
     bool dt;
+    bool st;
 
-    bool blocked = false;
-    std::map<uint8_t, uint8_t> keys = {
-        {5, KEY_DOWN},
-        {7, KEY_DOWN},
-        {8, KEY_DOWN},
-        {9, KEY_DOWN}
-    };
+    bool blocked;
+    std::map<uint8_t, uint8_t> keys;
 
     CPU(GPU& graphics_handler) : gpu(graphics_handler) {};
     void init();
@@ -139,13 +135,23 @@ struct CPU {
 };
 
 void CPU::init() {
-    std::memset(this->ram, 0, 4096);
-    std::memcpy(this->ram, fontset, sizeof(fontset) / sizeof(uint8_t));
+    std::memset(this->ram, 0, sizeof this->ram);
+    std::memcpy(this->ram, fontset, sizeof fontset);
 
     std::memset(this->v, 0, 0xf);
-    this->pc = 0x200;
+    this->pc = PROGRAMS_OFFSET;
     this->i = 0;
+
     this->dt = 0;
+    this->st = 0;
+
+    this->blocked = false;
+    this->keys = {
+        {0x0, KEY_DOWN}, {0x1, KEY_DOWN}, {0x2, KEY_DOWN}, {0x3, KEY_DOWN},
+        {0x4, KEY_DOWN}, {0x5, KEY_DOWN}, {0x6, KEY_DOWN}, {0x7, KEY_DOWN},
+        {0x8, KEY_DOWN}, {0x9, KEY_DOWN}, {0xa, KEY_DOWN}, {0xb, KEY_DOWN},
+        {0xc, KEY_DOWN}, {0xd, KEY_DOWN}, {0xe, KEY_DOWN}, {0xf, KEY_DOWN},
+    };
 
     std::srand(std::time(NULL));
 }
@@ -180,7 +186,7 @@ uint16_t CPU::fetch_opcode() {
 }
 
 void CPU::execute(const uint16_t opcode) {
-    const uint16_t kind = (opcode & 0xf000) >> 12;
+    const uint8_t kind = (opcode & 0xf000) >> 12;
     debug_log("opcode: %x\n", opcode);
     switch(kind) {
         case 0x0:
@@ -217,54 +223,113 @@ void CPU::execute(const uint16_t opcode) {
         } break;
 
         case 0x3: { // SE Vx, value
-            const uint16_t target = (opcode & 0x0f00) >> 8;
-            const uint16_t value = opcode & 0x00ff;
+            const uint8_t target = (opcode & 0x0f00) >> 8;
+            const uint8_t value = opcode & 0x00ff;
             if(this->v[target] == value) this->pc += OPCODE_SPAN;
             debug_log("SE V%x, %x\n", target, value);
         } break;
 
         case 0x4: { // SNE Vx, value
-            const uint16_t target = (opcode & 0x0f00) >> 8;
-            const uint16_t value = opcode & 0x00ff;
+            const uint8_t target = (opcode & 0x0f00) >> 8;
+            const uint8_t value = opcode & 0x00ff;
             if(this->v[target] != value) this->pc += OPCODE_SPAN;
-            debug_log("SE V%x, %x\n", target, value);
+            debug_log("SNE V%x, %x\n", target, value);
+        } break;
+
+        case 0x5: { // SE Vx, Vy
+            const uint8_t target = (opcode & 0x0f00) >> 8;
+            const uint8_t source = (opcode & 0x00f0) >> 4;
+            if(this->v[target] == this->v[source]) this->pc += OPCODE_SPAN;
+            debug_log("SE V%x, V%x\n", target, source);
         } break;
 
         case 0x6: { // LD Vx, value
-            const uint16_t target = (opcode & 0x0f00) >> 8;
-            const uint16_t value = opcode & 0x00ff;
+            const uint8_t target = (opcode & 0x0f00) >> 8;
+            const uint8_t value = opcode & 0x00ff;
             this->v[target] = value;
             debug_log("LD V%x, %x\n", target, value);
         } break;
 
         case 0x7: { // ADD Vx, value
-            const uint16_t target = (opcode & 0x0f00) >> 8;
-            const uint16_t value = opcode & 0x00ff;
+            const uint8_t target = (opcode & 0x0f00) >> 8;
+            const uint8_t value = opcode & 0x00ff;
             this->v[target] += value;
             debug_log("ADD V%x, %x\n", target, value);
         } break;
 
         case 0x8:
         {
-            const uint16_t nibble = opcode & 0x000f;
+            const uint8_t nibble = opcode & 0x000f;
             switch(nibble) {
                 case 0x0: { // LD Vx, Vy
-                    const uint16_t target = (opcode & 0x0f00) >> 8;
-                    const uint16_t source = (opcode & 0x00f0) >> 4;
+                    const uint8_t target = (opcode & 0x0f00) >> 8;
+                    const uint8_t source = (opcode & 0x00f0) >> 4;
                     this->v[target] = this->v[source];
                     debug_log("LD V%x, V%x\n", target, source);
                 } break;
 
+                case 0x1: { // OR Vx, Vy
+                    const uint8_t target = (opcode & 0x0f00) >> 8;
+                    const uint8_t source = (opcode & 0x00f0) >> 4;
+                    this->v[target] |= this->v[source];
+                    debug_log("OR V%x, V%x\n", target, source);
+                } break;
+
+                case 0x2: { // AND Vx, Vy
+                    const uint8_t target = (opcode & 0x0f00) >> 8;
+                    const uint8_t source = (opcode & 0x00f0) >> 4;
+                    this->v[target] &= this->v[source];
+                    debug_log("AND V%x, V%x\n", target, source);
+                } break;
+
+                case 0x3: { // XOR Vx, Vy
+                    const uint8_t target = (opcode & 0x0f00) >> 8;
+                    const uint8_t source = (opcode & 0x00f0) >> 4;
+                    this->v[target] ^= this->v[source];
+                    debug_log("XOR V%x, V%x\n", target, source);
+                } break;
+
+                case 0x4: { // ADD Vx, Vy
+                    const uint8_t target = (opcode & 0x0f00) >> 8;
+                    const uint8_t source = (opcode & 0x00f0) >> 4;
+                    this->v[0xf] = ((this->v[target] + this->v[source]) >= 0xff) ? 1 : 0;
+                    this->v[target] += this->v[source];
+                    debug_log("ADD V%x, V%x\n", target, source);
+                } break;
+
                 case 0x5: { // SUB Vx, Vy
-                    const uint16_t target = (opcode & 0x0f00) >> 8;
-                    const uint16_t source = (opcode & 0x00f0) >> 4;
+                    const uint8_t target = (opcode & 0x0f00) >> 8;
+                    const uint8_t source = (opcode & 0x00f0) >> 4;
                     this->v[0xf] = (this->v[target] > this->v[source]) ? 1 : 0;
                     this->v[target] -= this->v[source];
                     debug_log("SUB V%x, V%x\n", target, source);
                 } break;
 
+                case 0x6: { // SHR Vx, Vy
+                    const uint8_t target = (opcode & 0x0f00) >> 8;
+                    const uint8_t source = (opcode & 0x00f0) >> 4;
+                    this->v[0xf] = this->v[target] & 0x001;
+                    this->v[target] >>= 1;
+                    debug_log("SHR V%x\n", target);
+                } break;
+
+                case 0xE: { // SHL Vx, Vy
+                    const uint8_t target = (opcode & 0x0f00) >> 8;
+                    const uint8_t source = (opcode & 0x00f0) >> 4;
+                    this->v[0xf] = ((this->v[target] & 0x80) != 0) ? 1 : 0;
+                    this->v[target] <<= 1;
+                    debug_log("SHL V%x\n", target);
+                } break;
+
                 default: throw std::runtime_error("not implemented yet\n");
             }
+        } break;
+
+        case 0x9: { // SNE Vx, Vy
+            const uint8_t target = (opcode & 0x0f00) >> 8;
+            const uint8_t source = (opcode & 0x00f0) >> 4;
+            if(this->v[target] != this->v[source]) this->pc += OPCODE_SPAN;
+            debug_log("SNE V%x, V%x\n", target, source);
         } break;
 
         case 0xA: { // LD I, address
@@ -273,13 +338,20 @@ void CPU::execute(const uint16_t opcode) {
             debug_log("LD I, %x\n", address);
         } break;
 
+        case 0xC: { // RND Vx, byte
+            const uint8_t target = (opcode & 0x0f00) >> 8;
+            const uint8_t value = opcode & 0x00ff;
+            this->v[target] = (std::rand() % 256) & value;
+            debug_log("RND V%x, %x\n", target, value);
+        } break;
+
         case 0xD: { // DRW Vx, Vy, length
-            const uint16_t x = (opcode & 0x0f00) >> 8;
-            const uint16_t y = (opcode & 0x00f0) >> 4;
-            const uint16_t length = opcode & 0x000f;
+            const uint8_t x = (opcode & 0x0f00) >> 8;
+            const uint8_t y = (opcode & 0x00f0) >> 4;
+            const uint8_t length = opcode & 0x000f;
 
             std::vector<uint8_t> sprite;
-            for(size_t byte = 0; byte < length; byte++) {
+            for(int8_t byte = 0; byte < length; byte++) {
                 sprite.push_back(this->ram[this->i + byte]);
             }
 
@@ -290,59 +362,75 @@ void CPU::execute(const uint16_t opcode) {
 
         case 0xE:
         {
-            const uint16_t low_byte = opcode & 0x00ff;
+            const uint8_t source = (opcode & 0x0f00) >> 8;
+            auto& key_state = this->keys[this->v[source]];
+
+            const uint8_t low_byte = opcode & 0x00ff;
             switch(low_byte) {
+                case 0x9E: { // SKP Vx
+                    if(key_state == KEY_UP) this->pc += OPCODE_SPAN;
+                    debug_log("SKP V%x\n", source);
+                } break;
+
                 case 0xA1: { // SKNP Vx
-                    const uint16_t source = (opcode & 0x0f00) >> 8;
-                    auto& key_state = this->keys[this->v[source]];
-                    if(key_state == KEY_DOWN) {
-                        this->pc += OPCODE_SPAN;
-                    } else key_state = KEY_DOWN;
+                    if(key_state == KEY_DOWN) this->pc += OPCODE_SPAN;
                     debug_log("SKNP V%x\n", source);
                 } break;
 
-                default: throw std::runtime_error("not implemented yet\n");
+                default: throw std::runtime_error("unknown opcode\n");
             }
         } break;
 
         case 0xF:
         {
-            const uint16_t low_byte = opcode & 0x00ff;
+            const uint8_t low_byte = opcode & 0x00ff;
             switch(low_byte) {
                 case 0x07: { // LD Vx, DT
-                    const uint16_t target = (opcode & 0x0f00) >> 8;
+                    const uint8_t target = (opcode & 0x0f00) >> 8;
                     this->v[target] = this->dt;
                     debug_log("LD V%x, DT\n", target);
                 } break;
 
                 case 0x0A: { // LD Vx, K
-                    const uint16_t target = (opcode & 0x0f00) >> 8;
+                    const uint8_t target = (opcode & 0x0f00) >> 8;
                     this->blocked = true;
                     for(const auto& [code, state] : this->keys) {
                         if(state == KEY_DOWN) continue;
                         this->v[target] = code;
                         this->blocked = false;
                     }
-                    debug_log("LD V%x, %x\n", target, this->v[target]);
+                    debug_log("LD V%x, K\n", target);
                 } break;
-
+                
                 case 0x15: { // LD DT, Vx
-                    const uint16_t source = (opcode & 0x0f00) >> 8;
+                    const uint8_t source = (opcode & 0x0f00) >> 8;
                     this->dt = this->v[source];
                     debug_log("LD DT, V%x\n", source);
                 } break;
 
+                case 0x18: { // LD ST, Vx
+                    const uint8_t source = (opcode & 0x0f00) >> 8;
+                    this->st = this->v[source];
+                    debug_log("LD ST, V%x\n", source);
+                } break;
+
+                case 0x1E: { // ADD I, Vx
+                    const uint8_t source = (opcode & 0x0f00) >> 8;
+                    this->i += this->v[source];
+                    debug_log("ADD I, V%x\n", source);
+                } break;
+
                 case 0x29: { // LD F, VX
-                    const uint16_t source = (opcode & 0x0f00) >> 8;
+                    const uint8_t source = (opcode & 0x0f00) >> 8;
                     this->i = this->v[source] * FONT_LENGTH;
                     debug_log("LD F, V%x\n", source);
                 } break;
 
                 case 0x33: { // LD B, Vx
-                    const uint16_t source = (opcode & 0x0f00) >> 8;
-                    const uint16_t hundreds = this->v[source] / 100;
-                    const uint16_t tens = (this->v[source] - hundreds * 100) / 10;
-                    const uint16_t ones = ((this->v[source] - hundreds * 100) - tens) * 10;
+                    const uint8_t source = (opcode & 0x0f00) >> 8;
+                    const uint8_t hundreds = this->v[source] / 100;
+                    const uint8_t tens = (this->v[source] - hundreds * 100) / 10;
+                    const uint8_t ones = this->v[source] - hundreds * 100 - tens * 10;
                     this->ram[this->i] = hundreds;
                     this->ram[this->i + 1] = tens;
                     this->ram[this->i + 2] = ones;
@@ -350,7 +438,7 @@ void CPU::execute(const uint16_t opcode) {
                 } break;
 
                 case 0x55: { // LD [I], VX
-                    const uint16_t end = (opcode & 0x0f00) >> 8;
+                    const uint8_t end = (opcode & 0x0f00) >> 8;
                     for(size_t index = 0; index <= end; index++) {
                         this->ram[this->i + index] = this->v[index];
                     }
@@ -358,7 +446,7 @@ void CPU::execute(const uint16_t opcode) {
                 } break;
 
                 case 0x65: { // LD Vx, [I]
-                    const uint16_t end = (opcode & 0x0f00) >> 8;
+                    const uint8_t end = (opcode & 0x0f00) >> 8;
                     for(size_t index = 0; index <= end; index++) {
                         this->v[index] = this->ram[this->i + index];
                     }
@@ -381,6 +469,28 @@ void CPU::cycle() {
     if(this->blocked) this->pc -= 2; // go back to the last instruction
 }
 
+int8_t get_key_code(sf::Keyboard::Key key) {
+    switch(key) {
+        case sf::Keyboard::Num1: return 0x1;
+        case sf::Keyboard::Num2: return 0x2;
+        case sf::Keyboard::Num3: return 0x3;
+        case sf::Keyboard::Num4: return 0xc;
+        case sf::Keyboard::Q:    return 0x4;
+        case sf::Keyboard::W:    return 0x5;
+        case sf::Keyboard::E:    return 0x6;
+        case sf::Keyboard::R:    return 0xd;
+        case sf::Keyboard::A:    return 0x7;
+        case sf::Keyboard::S:    return 0x8;
+        case sf::Keyboard::D:    return 0x9;
+        case sf::Keyboard::F:    return 0xe;
+        case sf::Keyboard::Z:    return 0xa;
+        case sf::Keyboard::X:    return 0x0;
+        case sf::Keyboard::C:    return 0xb;
+        case sf::Keyboard::V:    return 0xf;
+        default: return -1;
+    }
+}
+
 int32_t main(int32_t argc, char* argv[]) {
     if(argc < 2) {
         std::cout << std::format("Usage: {} [ROM]\n", argv[0]);
@@ -389,7 +499,7 @@ int32_t main(int32_t argc, char* argv[]) {
 
     const auto file_path = std::string(argv[1]);
 
-    sf::RenderWindow screen(sf::VideoMode(64 * SCALE_FACTOR, 32 * SCALE_FACTOR), "octopus");
+    sf::RenderWindow screen(sf::VideoMode(WIDTH * SCALE_FACTOR, HEIGHT * SCALE_FACTOR), "octopus");
 
     GPU graphics_handler(screen);
 
@@ -406,16 +516,15 @@ int32_t main(int32_t argc, char* argv[]) {
                 break;
 
                 case sf::Event::KeyPressed: {
-                    int8_t key_code = -1;
-                    switch(event.key.code) {
-                        case sf::Keyboard::W: key_code = 5; break;
-                        case sf::Keyboard::A: key_code = 7; break;
-                        case sf::Keyboard::S: key_code = 8; break;
-                        case sf::Keyboard::D: key_code = 9; break;
-                        default: key_code = -1;
-                    }
+                    const auto key_code = get_key_code(event.key.code);
                     if(!processor.keys.contains(key_code)) break;
                     processor.keys[key_code] = KEY_UP;
+                } break;
+
+                case sf::Event::KeyReleased: {
+                    const auto key_code = get_key_code(event.key.code);
+                    if(!processor.keys.contains(key_code)) break;
+                    processor.keys[key_code] = KEY_DOWN;
                 } break;
 
                 default: break;
@@ -426,7 +535,7 @@ int32_t main(int32_t argc, char* argv[]) {
         graphics_handler.draw();
 
         processor.dt = 0;
-        std::this_thread::sleep_for(std::chrono::milliseconds(FRAMERATE));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
     return 0;

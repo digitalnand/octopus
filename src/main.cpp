@@ -338,6 +338,12 @@ void CPU::execute(const uint16_t opcode) {
             debug_log("LD I, %x\n", address);
         } break;
 
+        case 0xB: { // JP V0, address
+            const uint16_t address = opcode & 0x0fff;
+            this->pc = address + this->v[0];
+            debug_log("JP V0, %x\n", address);
+        } break;
+
         case 0xC: { // RND Vx, byte
             const uint8_t target = (opcode & 0x0f00) >> 8;
             const uint8_t value = opcode & 0x00ff;
@@ -355,8 +361,7 @@ void CPU::execute(const uint16_t opcode) {
                 sprite.push_back(this->ram[this->i + byte]);
             }
 
-            const auto overlapping = this->gpu.copy_to_framebuffer(this->v[x], this->v[y], sprite);
-            this->v[0xf] = (overlapping) ? 1 : 0;
+            this->v[0xf] = this->gpu.copy_to_framebuffer(this->v[x], this->v[y], sprite);
             debug_log("DRW V%x, V%x, %x\n", x, y, length);
         } break;
 

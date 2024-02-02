@@ -25,6 +25,8 @@
 #define KEY_UP 1
 #define KEY_DOWN 0
 
+#define CLOCK_HZ (1000 / 60)
+
 #ifdef DEBUG
 #define debug_log(...) std::printf(__VA_ARGS__)
 #else
@@ -75,7 +77,7 @@ GPU::GPU(sf::RenderWindow& screen) : active_screen(screen) {
 uint8_t GPU::copy_to_framebuffer(const uint8_t default_x, const uint8_t default_y, const std::vector<uint8_t> sprite) {
     uint8_t overlapping = 0;
 
-    for(int8_t pixel_y = 0; pixel_y < sprite.size(); pixel_y++) {
+    for(int8_t pixel_y = 0; pixel_y < static_cast<int8_t>(sprite.size()); pixel_y++) {
         const auto byte = sprite[pixel_y];
         for(int8_t bit_index = 8; bit_index >= 0; bit_index--) {
             const int8_t pixel_x = 8 - bit_index;
@@ -120,8 +122,8 @@ struct CPU {
     uint8_t v[16];
     uint16_t pc;
     uint16_t i;
-    bool dt;
-    bool st;
+    uint8_t dt;
+    uint8_t st;
 
     bool blocked;
     std::map<uint8_t, uint8_t> keys;
@@ -307,7 +309,6 @@ void CPU::execute(const uint16_t opcode) {
 
                 case 0x6: { // SHR Vx, Vy
                     const uint8_t target = (opcode & 0x0f00) >> 8;
-                    const uint8_t source = (opcode & 0x00f0) >> 4;
                     this->v[0xf] = this->v[target] & 0x001;
                     this->v[target] >>= 1;
                     debug_log("SHR V%x\n", target);
@@ -315,7 +316,6 @@ void CPU::execute(const uint16_t opcode) {
 
                 case 0xE: { // SHL Vx, Vy
                     const uint8_t target = (opcode & 0x0f00) >> 8;
-                    const uint8_t source = (opcode & 0x00f0) >> 4;
                     this->v[0xf] = ((this->v[target] & 0x80) != 0) ? 1 : 0;
                     this->v[target] <<= 1;
                     debug_log("SHL V%x\n", target);
@@ -401,7 +401,7 @@ void CPU::execute(const uint16_t opcode) {
                     }
                     debug_log("LD V%x, K\n", target);
                 } break;
-                
+
                 case 0x15: { // LD DT, Vx
                     const uint8_t source = (opcode & 0x0f00) >> 8;
                     this->dt = this->v[source];
@@ -507,7 +507,11 @@ int32_t main(int32_t argc, char* argv[]) {
     processor.init();
     processor.dump_into_memory(file_path);
 
+    auto clock_previous = std::chrono::steady_clock::now();
+
     while(screen.isOpen()) {
+        const auto clock_now = std::chrono::steady_clock::now();
+
         sf::Event event;
         while(screen.pollEvent(event)) {
             switch(event.type) {
@@ -534,8 +538,16 @@ int32_t main(int32_t argc, char* argv[]) {
         processor.cycle();
         graphics_handler.draw();
 
-        processor.dt = 0;
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        const auto clock_rate = std::chrono::milliseconds(CLOCK_HZ).count();
+        if(std::chrono::duration_cast<std::chrono::milliseconds>(clock_now - clock_previous).count() > clock_rate) {
+            if(processor.dt > 0) processor.dt--;
+            if(processor.st > 0) {
+                processor.st--;
+                if(processor.st == 0) std::cout << "beep\n";
+            }
+            
+            clock_previous = clock_now;
+        }
     }
 
     return 0;

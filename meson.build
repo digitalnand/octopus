@@ -8,5 +8,7 @@ endif
 sfml_dep = dependency('sfml')
 
 executable('octop',
+          'src/octopus.cpp',
           'src/main.cpp',
+          include_directories : 'include',
           dependencies: sfml_dep)

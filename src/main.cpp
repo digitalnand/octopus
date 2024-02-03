@@ -294,30 +294,42 @@ void CPU::execute(const uint16_t opcode) {
                 case 0x4: { // ADD Vx, Vy
                     const uint8_t target = (opcode & 0x0f00) >> 8;
                     const uint8_t source = (opcode & 0x00f0) >> 4;
-                    this->v[0xf] = ((this->v[target] + this->v[source]) >= 0xff) ? 1 : 0;
+                    const auto carry = ((this->v[target] + this->v[source]) >= 0xff);
                     this->v[target] += this->v[source];
+                    this->v[0xf] = carry;
                     debug_log("ADD V%x, V%x\n", target, source);
                 } break;
 
                 case 0x5: { // SUB Vx, Vy
                     const uint8_t target = (opcode & 0x0f00) >> 8;
                     const uint8_t source = (opcode & 0x00f0) >> 4;
-                    this->v[0xf] = (this->v[target] > this->v[source]) ? 1 : 0;
-                    this->v[target] -= this->v[source];
+                    const auto not_borrow = (this->v[target] >= this->v[source]);
+                    this->v[target] = this->v[target] - this->v[source];
+                    this->v[0xf] = not_borrow;
                     debug_log("SUB V%x, V%x\n", target, source);
                 } break;
 
                 case 0x6: { // SHR Vx, Vy
                     const uint8_t target = (opcode & 0x0f00) >> 8;
-                    this->v[0xf] = this->v[target] & 0x001;
+                    const auto least_significant_bit = this->v[target] & 0x001;
                     this->v[target] >>= 1;
+                    this->v[0xf] = least_significant_bit;
                     debug_log("SHR V%x\n", target);
+                } break;
+
+                case 0x7: { // SUBN Vx, Vy
+                    const uint8_t target = (opcode & 0x0f00) >> 8;
+                    const uint8_t source = (opcode & 0x00f0) >> 4;
+                    this->v[target] = this->v[source] - this->v[target];
+                    this->v[0xf] = (this->v[source] > this->v[target]);
+                    debug_log("SUBN V%x, V%x\n", target, source);
                 } break;
 
                 case 0xE: { // SHL Vx, Vy
                     const uint8_t target = (opcode & 0x0f00) >> 8;
-                    this->v[0xf] = ((this->v[target] & 0x80) != 0) ? 1 : 0;
+                    const auto most_significant_bit = this->v[target] & 0x80;
                     this->v[target] <<= 1;
+                    this->v[0xf] = (most_significant_bit > 0) ? 1 : 0;
                     debug_log("SHL V%x\n", target);
                 } break;
 

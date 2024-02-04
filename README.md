@@ -1,7 +1,7 @@
 # Usage
 build the project
 ```bash
-just build release
+just setup release && just build release
 ```
 provide bin/octop with a valid CHIP-8 ROM, ending with a ".ch8" extension
 ```bash
